@@ -1,0 +1,98 @@
+{
+  "description": "Ground-truth relevance judgments for RAG method comparison. Each query maps to a set of chunk IDs that contain relevant supporting information. Designed for MachineLearningNotes.pdf (CampusX 100 Days of ML).",
+  "queries": {
+    "what is gradient descent": {
+      "relevant_chunks": [],
+      "note": "Chunks discussing iterative optimization, cost function minimization, learning rate, and gradient steps. Auto-matched by keyword intersection with chunk text."
+    },
+    "explain the bias variance tradeoff": {
+      "relevant_chunks": [],
+      "note": "Chunks covering model complexity, underfitting, overfitting, bias, variance, and the tradeoff between them."
+    },
+    "how does a decision tree work": {
+      "relevant_chunks": [],
+      "note": "Chunks explaining entropy, information gain, Gini impurity, splitting criteria, and tree construction."
+    },
+    "what is regularization in machine learning": {
+      "relevant_chunks": [],
+      "note": "Chunks discussing L1/L2 regularization, ridge, lasso, weight decay, and preventing overfitting."
+    },
+    "explain support vector machines": {
+      "relevant_chunks": [],
+      "note": "Chunks covering margin maximization, kernel trick, support vectors, and hyperplane separation."
+    },
+    "what is cross validation": {
+      "relevant_chunks": [],
+      "note": "Chunks explaining k-fold, LOOCV, validation strategy, and model selection."
+    },
+    "how does logistic regression work": {
+      "relevant_chunks": [],
+      "note": "Chunks covering sigmoid function, log odds, maximum likelihood, and binary classification."
+    },
+    "what is principal component analysis": {
+      "relevant_chunks": [],
+      "note": "Chunks explaining dimensionality reduction, eigenvalues, eigenvectors, and variance explained."
+    },
+    "explain the concept of overfitting": {
+      "relevant_chunks": [],
+      "note": "Chunks discussing training vs test error, model complexity, generalization gap, and solutions."
+    },
+    "what is the difference between supervised and unsupervised learning": {
+      "relevant_chunks": [],
+      "note": "Chunks covering labeled vs unlabeled data, classification, clustering, and learning paradigms."
+    }
+  },
+  "auto_eval_strategy": "keyword_filter",
+  "keyword_filter_config": {
+    "what is gradient descent": {
+      "required_terms": ["gradient", "descent", "learning", "rate", "optimization"],
+      "bonus_terms": ["cost", "function", "step", "converge"],
+      "min_required": 2
+    },
+    "explain the bias variance tradeoff": {
+      "required_terms": ["bias", "variance", "tradeoff", "underfit", "overfit"],
+      "bonus_terms": ["complexity", "error", "model"],
+      "min_required": 2
+    },
+    "how does a decision tree work": {
+      "required_terms": ["decision", "tree", "entropy", "gini", "split"],
+      "bonus_terms": ["information", "gain", "leaf", "node", "impurity"],
+      "min_required": 2
+    },
+    "what is regularization in machine learning": {
+      "required_terms": ["regularization", "regularize", "lasso", "ridge", "penalty"],
+      "bonus_terms": ["l1", "l2", "overfitting", "weight", "sparse"],
+      "min_required": 2
+    },
+    "explain support vector machines": {
+      "required_terms": ["support", "vector", "svm", "kernel", "margin"],
+      "bonus_terms": ["hyperplane", "classifier", "hinge", "dual"],
+      "min_required": 2
+    },
+    "what is cross validation": {
+      "required_terms": ["cross", "validation", "fold", "train", "valid"],
+      "bonus_terms": ["k-fold", "split", "test", "loo"],
+      "min_required": 2
+    },
+    "how does logistic regression work": {
+      "required_terms": ["logistic", "regression", "sigmoid", "log", "odds"],
+      "bonus_terms": ["classification", "binary", "maximum", "likelihood"],
+      "min_required": 2
+    },
+    "what is principal component analysis": {
+      "required_terms": ["principal", "component", "pca", "eigenvalue", "eigenvector"],
+      "bonus_terms": ["dimensionality", "variance", "reduction", "covariance"],
+      "min_required": 2
+    },
+    "explain the concept of overfitting": {
+      "required_terms": ["overfit", "overfitting", "generalize", "train", "test"],
+      "bonus_terms": ["complex", "memorize", "noise", "prune"],
+      "min_required": 2
+    },
+    "what is the difference between supervised and unsupervised learning": {
+      "required_terms": ["supervised", "unsupervised", "labeled", "unlabeled"],
+      "bonus_terms": ["classification", "clustering", "regression", "label"],
+      "min_required": 2
+    }
+  }
+}

@@ -1,0 +1,101 @@
+HotpotQA Benchmark Commands
+
+Run these from the project root in PowerShell:
+
+  C:\Users\aarav\OneDrive\Desktop\job applications\new projects\RAG comparison
+
+
+1. Activate the project conda environment
+
+  conda activate rag-multimodal
+
+
+2. Install/refresh dependencies
+
+  python -m pip install -r requirements.txt
+
+If you need to rebuild HotpotQA artifacts and `datasets` is missing, install it only for
+the adapter step:
+
+  python -m pip install datasets
+
+
+3. Build real HotpotQA artifacts, mini sample
+
+  python benchmarking\hotpot_adapter.py --config distractor --split validation --limit 25
+
+This writes:
+
+  benchmarking\artifacts\hotpot_chunks.json
+  benchmarking\artifacts\hotpot_queries.json
+  benchmarking\artifacts\hotpot_relevance.json
+
+Important: after the artifact files exist, remove `datasets` and `pyarrow` from this
+environment before running vector modes. In this project environment, `pyarrow` can
+crash `sentence-transformers` on import.
+
+  python -m pip uninstall -y datasets pyarrow
+
+
+4. Build the app retrieval store from HotpotQA
+
+  python benchmarking\build_hotpot_store.py
+
+This overwrites:
+
+  backend_or_exports\current_corpus
+
+with the HotpotQA benchmark corpus.
+
+
+5. Run all 8 retrieval modes on the mini benchmark
+
+  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes all --top-k 10
+
+This writes:
+
+  benchmarking\results\hotpot_raw_results.json
+  benchmarking\results\hotpot_run_metadata.json
+
+
+6. Compute benchmark metrics
+
+  python benchmarking\hotpot_metrics.py
+
+This writes:
+
+  benchmarking\results\hotpot_metrics.json
+
+
+Optional: run only fast lexical smoke test
+
+  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes bm25 --top-k 10
+  python benchmarking\hotpot_metrics.py
+
+
+Optional: scale up after the 25-query run works
+
+  python benchmarking\hotpot_adapter.py --config distractor --split validation --limit 100
+  python benchmarking\build_hotpot_store.py
+  python benchmarking\run_hotpot_benchmark.py --limit 100 --modes all --top-k 10
+  python benchmarking\hotpot_metrics.py
+
+
+Optional: use the full validation split
+
+  python benchmarking\hotpot_adapter.py --config distractor --split validation
+  python benchmarking\build_hotpot_store.py
+  python benchmarking\run_hotpot_benchmark.py --modes all --top-k 10
+  python benchmarking\hotpot_metrics.py
+
+
+Notes:
+
+- Use the `distractor` config first. It is the best fit for this repo because each query includes gold evidence plus distractor context.
+- The first HotpotQA run may download the dataset from Hugging Face.
+- The first embedding-backed store build may download or load the sentence-transformer model.
+- If the base Python fails with NumPy/SciPy errors, run everything inside `rag-multimodal`.
+- If all-mode retrieval exits silently or says raw results are missing, run step 5 again
+  after uninstalling `datasets` and `pyarrow`.
+- `build_hotpot_store.py` intentionally overwrites the current app corpus. Re-run the PDF upload pipeline later if you want to restore a PDF corpus.
+- `run_hotpot_benchmark.py` avoids DeepSeek and benchmarks retrieval only.

@@ -1,0 +1,28 @@
+RAG Comparison Project Commands
+
+Run these from the project root in PowerShell.
+
+1. Activate the conda environment
+   conda activate rag-multimodal
+
+2. Start the backend API
+   C:\Users\aarav\anaconda3\envs\rag-multimodal\python.exe backend.py
+
+3. Start the frontend dev server in a second terminal
+   cd frontend
+   npm run dev
+
+Optional checks:
+- Verify backend health:
+  Invoke-WebRequest http://127.0.0.1:5000/api/health | Select-Object -ExpandProperty Content
+
+- Build the frontend for production:
+  cd frontend
+  npm run build
+
+Notes:
+- Run the backend from the project root.
+- The frontend expects the backend on http://127.0.0.1:5000.
+- Use the PDF upload button in the UI to build a shared FAISS corpus for the PDF.
+- Naive and Hybrid use the shared FAISS vector index. BM25 uses the same stored chunks for lexical scoring.
+- Each question now runs fresh retrieval for the selected mode.

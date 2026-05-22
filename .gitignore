@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+frontend/public/data/
+
+# Generated corpus & notebook artifacts (all regeneratable)
+backend_or_exports/
+
+# Logs
+*.log
+vite-*.log
+frontend/vite-*.err.log
+frontend/vite-*.out.log
+
+# Jupyter
+notebooks/.ipynb_checkpoints/
+
+# Benchmark artifacts
+benchmarking/artifacts/
+benchmarking/results/
+benchmarking/tmp_*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent config (local to machine)
+.agents/
+skills-lock.json

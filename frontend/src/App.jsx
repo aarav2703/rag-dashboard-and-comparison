@@ -1,0 +1,623 @@
+import React, { useEffect, useRef, useState } from 'react'
+import EmbeddingConstellation from './components/EmbeddingConstellation.jsx'
+import NaiveRagAnalytics from './components/NaiveRagAnalytics.jsx'
+import Bm25Analytics from './components/Bm25Analytics.jsx'
+import HybridAnalytics from './components/HybridAnalytics.jsx'
+import RerankAnalytics from './components/RerankAnalytics.jsx'
+import GraphRagAnalytics from './components/GraphRagAnalytics.jsx'
+import VectorlessMarkdownAnalytics from './components/VectorlessMarkdownAnalytics.jsx'
+import AgenticRagAnalytics from './components/AgenticRagAnalytics.jsx'
+import MultiHopRagAnalytics from './components/MultiHopRagAnalytics.jsx'
+import MethodComparison from './components/MethodComparison.jsx'
+import EvaluationPanel from './components/EvaluationPanel.jsx'
+import ConsolePanel from './components/ConsolePanel.jsx'
+import { buildEmbeddings } from './lib/ragUtils.js'
+
+const API_BASE = 'http://localhost:5000'
+
+const METHOD_ICONS = { naive: '\u2606', bm25: '\u2261', hybrid: '\u29C8', rerank: '\u21C5', graph: '\u2B21', vectorless: '\u2B1A', agentic: '\u2699', multihop: '\u21CC', compare: '\u2981' }
+
+const PIPELINES = {
+  naive: {
+    label: 'Naive Vector RAG',
+    shortLabel: 'Naive',
+    prefix: 'naive_rag',
+    note: 'Semantic embedding retrieval with a 2D projection of chunks and query evidence.',
+    evidenceMode: 'Semantic similarity'
+  },
+  bm25: {
+    label: 'BM25 Lexical Retrieval',
+    shortLabel: 'BM25',
+    prefix: 'bm25_lexical',
+    note: 'Exact token matching with term rarity, highlight spans, and contribution scoring.',
+    evidenceMode: 'Exact lexical match'
+  },
+  hybrid: {
+    label: 'Hybrid RAG',
+    shortLabel: 'Hybrid',
+    prefix: 'hybrid_rag',
+    note: 'Combines semantic and lexical candidates, then rank-fuses the merged evidence pool.',
+    evidenceMode: 'Vector + BM25 fusion'
+  },
+  rerank: {
+    label: 'Rerank RAG',
+    shortLabel: 'Rerank',
+    prefix: 'rerank_rag',
+    note: 'Retrieves a wider candidate set, then reranks candidates to improve top-k precision.',
+    evidenceMode: 'Candidate reranking'
+  },
+  graph: {
+    label: 'GraphRAG-lite',
+    shortLabel: 'Graph',
+    prefix: 'graph_rag',
+    note: 'Extracts entity-section relationships and traverses the graph to find multi-hop evidence.',
+    evidenceMode: 'Entity graph traversal'
+  },
+  vectorless: {
+    label: 'Vectorless Markdown RAG',
+    shortLabel: 'Tree',
+    prefix: 'vectorless_markdown',
+    note: 'Reads the PDF through a markdown-like document tree instead of vector similarity.',
+    evidenceMode: 'Document structure navigation'
+  },
+  agentic: {
+    label: 'Agentic RAG',
+    shortLabel: 'Agent',
+    prefix: 'agentic_rag',
+    note: 'Plans retrieval, chooses tools, critiques evidence, retries when needed, then accepts final support.',
+    evidenceMode: 'Tool orchestration'
+  },
+  multihop: {
+    label: 'Multi-hop RAG',
+    shortLabel: 'Hops',
+    prefix: 'multihop_rag',
+    note: 'Looks for a first passage, pulls out a bridge clue, then asks a second query to fill the missing step.',
+    evidenceMode: 'Hop-by-hop bridge retrieval'
+  },
+  compare: {
+    label: 'Compare All Methods',
+    shortLabel: 'Compare',
+    prefix: '',
+    note: 'Loads every method side by side for answer, evidence, and visual comparison.',
+    evidenceMode: 'All methods',
+    comparisonOnly: true
+  }
+}
+
+const RUNNABLE_METHODS = Object.entries(PIPELINES)
+  .filter(([, pipeline]) => !pipeline.comparisonOnly)
+  .map(([id, pipeline]) => ({ id, ...pipeline }))
+
+const INITIAL_METHOD_STATUS = {
+  naive: 'red', bm25: 'red', hybrid: 'red', rerank: 'red',
+  graph: 'red', vectorless: 'red', agentic: 'red', multihop: 'red'
+}
+
+function InfoButton({ text }) {
+  return (
+    <span className="info-popover">
+      <button type="button" aria-label="Explain this RAG method">i</button>
+      <span>{text}</span>
+    </span>
+  )
+}
+
+function PipelineBadge({ status }) {
+  return (
+    <span className={`pipeline-badge ${status}`}>
+      <span className="pipeline-badge-light" />
+      {status === 'red' && 'Not run'}
+      {status === 'yellow' && 'Running'}
+      {status === 'green' && 'Ready'}
+    </span>
+  )
+}
+
+function hasUsableMethodArtifact(payload) {
+  const chunks = payload?.chunks || []
+  const queryResult = payload?.queryResult || {}
+  const results = queryResult?.results || []
+  return chunks.length > 0 || results.length > 0 || Boolean(queryResult?.answer)
+}
+
+function WorkspaceSummary({ chunks, queryResult, visData, activePipeline, sourceName }) {
+  const results = queryResult?.results || []
+  const citedPages = new Set(results.map((result) => result.page_number).filter(Boolean))
+  const queryTerms = visData?.query_terms || queryResult?.query_terms || []
+  const missingTerms = visData?.missing_query_terms || queryResult?.missing_query_terms || []
+
+  return (
+    <section className="panel workspace-summary">
+      <div className="summary-card">
+        <span>Corpus</span>
+        <strong>{chunks.length}</strong>
+        <small>{sourceName}</small>
+      </div>
+      <div className="summary-card">
+        <span>Retrieved</span>
+        <strong>{results.length}</strong>
+        <small>{activePipeline.evidenceMode}</small>
+      </div>
+      <div className="summary-card">
+        <span>Cited Pages</span>
+        <strong>{citedPages.size}</strong>
+        <small>{citedPages.size ? `P${Array.from(citedPages).slice(0, 4).join(', P')}` : 'No evidence yet'}</small>
+      </div>
+      <div className="summary-card">
+        <span>{queryTerms.length ? 'Query Terms' : 'Answer'}</span>
+        <strong>{queryTerms.length || (queryResult?.answer ? 'Ready' : '-')}</strong>
+        <small>{missingTerms.length ? `${missingTerms.length} missing terms` : queryResult?.answer_source || 'Awaiting query'}</small>
+      </div>
+    </section>
+  )
+}
+
+export default function App() {
+  const [pipelineMode, setPipelineMode] = useState('naive')
+  const [chunks, setChunks] = useState([])
+  const [sourceName, setSourceName] = useState('(no file loaded)')
+  const [queryResult, setQueryResult] = useState(null)
+  const [visData, setVisData] = useState(null)
+  const [question, setQuestion] = useState('')
+  const [logs, setLogs] = useState([])
+  const [uploadedFile, setUploadedFile] = useState(null)
+  const [pipelineRunning, setPipelineRunning] = useState(false)
+  const [pipelineStatus, setPipelineStatus] = useState('red')
+  const [methodStatuses, setMethodStatuses] = useState(INITIAL_METHOD_STATUS)
+  const [corpusReady, setCorpusReady] = useState(false)
+  const [comparisonData, setComparisonData] = useState({})
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const eventSourceRef = useRef(null)
+
+  function pushLog(message, level = 'info') {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    setLogs((prev) => [...prev.slice(-99), { time, message, level }])
+  }
+
+  const activePipeline = PIPELINES[pipelineMode] || PIPELINES.naive
+  const activeStatus = activePipeline.comparisonOnly
+    ? (RUNNABLE_METHODS.every((method) => methodStatuses[method.id] === 'green') ? 'green' : corpusReady ? 'yellow' : 'red')
+    : (methodStatuses[pipelineMode] || 'red')
+
+  function getArtifactUrl(name) {
+    return `/data/${activePipeline.prefix}_${name}`
+  }
+
+  async function loadMethodArtifacts(method) {
+    const pipeline = PIPELINES[method]
+    const [chunksRes, queryRes, visRes] = await Promise.all([
+      fetch(`/data/${pipeline.prefix}_chunks.json`),
+      fetch(`/data/${pipeline.prefix}_query_result.json`),
+      fetch(`/data/${pipeline.prefix}_vis.json`)
+    ])
+
+    if (!chunksRes.ok || !queryRes.ok || !visRes.ok) {
+      throw new Error(`${pipeline.label} artifacts are not available yet`)
+    }
+
+    const [chunksJson, queryJson, visJson] = await Promise.all([
+      chunksRes.json(), queryRes.json(), visRes.json()
+    ])
+
+    return {
+      chunks: buildEmbeddings(chunksJson?.chunks || []),
+      queryResult: queryJson || { query: '', results: [] },
+      visData: visJson || {}
+    }
+  }
+
+  async function loadComparisonArtifacts() {
+    const entries = await Promise.all(
+      RUNNABLE_METHODS.map(async (method) => {
+        try {
+          const payload = await loadMethodArtifacts(method.id)
+          return [method.id, payload]
+        } catch (error) {
+          return [method.id, { error: String(error.message || error) }]
+        }
+      })
+    )
+    const nextComparisonData = Object.fromEntries(entries)
+    setComparisonData(nextComparisonData)
+    pushLog('Loaded comparison artifacts for all available methods', 'ok')
+    return nextComparisonData
+  }
+
+  function hydrateSingleMethod(methodId, payload) {
+    if (!payload || payload.error) return
+    setChunks(payload.chunks || [])
+    setQueryResult(payload.queryResult || { query: '', results: [] })
+    setVisData(payload.visData || {})
+    if (hasUsableMethodArtifact(payload)) {
+      setMethodStatuses((prev) => ({ ...prev, [methodId]: 'green' }))
+      setCorpusReady(true)
+    }
+  }
+
+  useEffect(() => {
+    const setupEventStream = () => {
+      const es = new EventSource(`${API_BASE}/api/logs`)
+      eventSourceRef.current = es
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.message === 'heartbeat') return
+          const level = data.level || 'info'
+          const msg = data.message || ''
+          if (msg) pushLog(msg, level)
+        } catch (e) {}
+      }
+      es.onerror = () => { es.close(); setTimeout(setupEventStream, 2000) }
+    }
+    setupEventStream()
+    return () => { eventSourceRef.current?.close() }
+  }, [])
+
+  useEffect(() => {
+    const pollStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/status`)
+        if (res.ok) { const data = await res.json(); setPipelineStatus(data.state) }
+      } catch (e) {}
+    }
+    const interval = setInterval(pollStatus, 500)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    if (activePipeline.comparisonOnly) return
+    const payload = comparisonData[pipelineMode]
+    if (payload && !payload.error) { hydrateSingleMethod(pipelineMode, payload); return }
+    loadMethodArtifacts(pipelineMode)
+      .then((artifacts) => hydrateSingleMethod(pipelineMode, artifacts))
+      .catch(() => {})
+  }, [pipelineMode])
+
+  async function handleFileSelection(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.name.toLowerCase().endsWith('.pdf')) { pushLog('Only PDF files are supported', 'error'); return }
+    setUploadedFile(file)
+    setPipelineStatus('red')
+    setMethodStatuses(INITIAL_METHOD_STATUS)
+    setCorpusReady(false)
+    setChunks([])
+    setQueryResult(null)
+    setVisData(null)
+    setComparisonData({})
+    setSourceName('(no file loaded)')
+    pushLog(`File selected: ${file.name}`, 'info')
+  }
+
+  async function handleRunPipeline() {
+    if (!uploadedFile) {
+      if (activePipeline.comparisonOnly) { await loadComparisonArtifacts(); return }
+      pushLog('Please select a file first', 'error')
+      return
+    }
+    if (activePipeline.comparisonOnly) { await loadComparisonArtifacts(); return }
+
+    setPipelineRunning(true)
+    setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'yellow' }))
+    pushLog('Starting pipeline execution...', 'info')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', uploadedFile)
+      const uploadRes = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData })
+      if (!uploadRes.ok) throw new Error('Upload failed: ' + (await uploadRes.text()))
+      const uploadData = await uploadRes.json()
+      pushLog(`File uploaded successfully: ${uploadData.filename}`, 'ok')
+
+      const runRes = await fetch(`${API_BASE}/api/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: pipelineMode })
+      })
+      if (!runRes.ok) throw new Error('Pipeline start failed: ' + (await runRes.text()))
+
+      let completed = false; let attempts = 0
+      while (!completed && attempts < 300) {
+        const statusRes = await fetch(`${API_BASE}/api/status`)
+        if (statusRes.ok) { const status = await statusRes.json(); if (status.state === 'green') { completed = true; break } }
+        await new Promise(resolve => setTimeout(resolve, 500)); attempts++
+      }
+
+      if (completed) {
+        pushLog('Pipeline completed successfully!', 'ok')
+        setCorpusReady(true)
+        setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'green' }))
+        await new Promise(resolve => setTimeout(resolve, 500))
+        try {
+          const [chunksRes, queryRes, visRes] = await Promise.all([fetch(getArtifactUrl('chunks.json')), fetch(getArtifactUrl('query_result.json')), fetch(getArtifactUrl('vis.json'))])
+          const [chunksJson, queryJson, visJson] = await Promise.all([chunksRes.json(), queryRes.json(), visRes.json()])
+          const loadedChunks = buildEmbeddings(chunksJson?.chunks || [])
+          setChunks(loadedChunks); setQueryResult(queryJson || { query: '', results: [] }); setVisData(visJson || { points: [], query_point: null })
+          setSourceName(uploadedFile.name)
+        } catch (e) { pushLog(`Failed to load pipeline output: ${String(e)}`, 'error') }
+      } else { pushLog('Pipeline timeout', 'error'); setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'red' })) }
+    } catch (e) { pushLog(`Pipeline error: ${String(e)}`, 'error'); setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'red' })) }
+    finally { setPipelineRunning(false) }
+  }
+
+  async function handleAskQuestion() {
+    if (!question.trim()) { pushLog('Type a question first.', 'error'); return }
+
+    if (activePipeline.comparisonOnly) {
+      if (!corpusReady && pipelineStatus !== 'green') { pushLog('Build the PDF corpus first.', 'error'); return }
+      pushLog(`Comparison question: "${question}"`, 'info')
+      for (const method of RUNNABLE_METHODS) {
+        setMethodStatuses((prev) => ({ ...prev, [method.id]: 'yellow' }))
+        pushLog(`Running ${method.label}...`, 'info')
+        try {
+          const queryRes = await fetch(`${API_BASE}/api/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question, mode: method.id }) })
+          if (!queryRes.ok) throw new Error(await queryRes.text())
+          const queryJson = await queryRes.json()
+          const artifacts = await loadMethodArtifacts(method.id)
+          const payload = { ...artifacts, queryResult: queryJson }
+          setComparisonData((prev) => ({ ...prev, [method.id]: payload }))
+          if (pipelineMode === method.id) hydrateSingleMethod(method.id, payload)
+          setMethodStatuses((prev) => ({ ...prev, [method.id]: 'green' }))
+          pushLog(`${method.label} complete: retrieved ${queryJson.results?.length || 0} chunks`, 'ok')
+        } catch (error) {
+          setComparisonData((prev) => ({ ...prev, [method.id]: { ...(prev[method.id] || {}), error: String(error.message || error) } }))
+          setMethodStatuses((prev) => ({ ...prev, [method.id]: 'red' }))
+          pushLog(`${method.label} failed: ${String(error.message || error)}`, 'error')
+        }
+      }
+      return
+    }
+
+    if (!chunks.length) { pushLog('No corpus loaded. Run a pipeline first.', 'error'); return }
+    if (!corpusReady && pipelineStatus !== 'green') { pushLog('Pipeline not ready.', 'error'); return }
+
+    pushLog(`Question: "${question}"`, 'info')
+    setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'yellow' }))
+    try {
+      const queryRes = await fetch(`${API_BASE}/api/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: question, mode: pipelineMode }) })
+      if (!queryRes.ok) throw new Error('Query failed: ' + (await queryRes.text()))
+      const result = await queryRes.json()
+      setQueryResult(result)
+      const artifacts = await loadMethodArtifacts(pipelineMode)
+      setVisData(artifacts.visData)
+      if (pipelineMode === 'naive') {
+        const retrievedIds = new Set(result.results.map(r => r.chunk_id))
+        const updatedPoints = (artifacts.visData.points || []).map(p => ({ ...p, is_retrieved: retrievedIds.has(p.chunk_id) }))
+        setVisData({ ...artifacts.visData, points: updatedPoints })
+      }
+      setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'green' }))
+      pushLog(`Retrieved ${result.results.length} chunks`, 'ok')
+    } catch (e) { setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'red' })); pushLog(`Query error: ${String(e)}`, 'error') }
+  }
+
+  useEffect(() => { pushLog('Ready. Upload a PDF and run a RAG mode to inspect retrieval evidence.', 'info') }, [])
+
+  return (
+    <div className="app-layout">
+      <aside className="app-sidebar">
+        <div className="sidebar-brand">
+          RAG Evidence<br />Lab
+          <span>Retrieval Diagnostics</span>
+        </div>
+
+        <div>
+          <div className="sidebar-section-label">Retrieval Methods</div>
+          <nav className="sidebar-methods">
+            {Object.entries(PIPELINES).map(([mode, pipeline]) => (
+              <button
+                key={mode}
+                type="button"
+                className={`sidebar-method-btn ${pipelineMode === mode ? 'active' : ''} ${methodStatuses[mode] || ''}`}
+                onClick={() => setPipelineMode(mode)}
+                disabled={pipelineRunning}
+              >
+                <span className="sidebar-method-icon">{METHOD_ICONS[mode]}</span>
+                {pipeline.shortLabel}
+                {!pipeline.comparisonOnly && (
+                  <span className={`sidebar-status-dot ${methodStatuses[mode] || 'red'}`} aria-label={`${pipeline.shortLabel} status`} />
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="sidebar-section-label">Pipeline</div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <label className="file-control" style={{ fontSize: 10, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+            Upload PDF
+            <input type="file" accept=".pdf" onChange={handleFileSelection} disabled={pipelineRunning} style={{ fontSize: 10, padding: '7px 8px' }} />
+          </label>
+          <button className="run-button" onClick={handleRunPipeline}
+            disabled={(!uploadedFile && !activePipeline.comparisonOnly) || pipelineRunning}
+            style={{ opacity: (!uploadedFile && !activePipeline.comparisonOnly) || pipelineRunning ? 0.5 : 1, fontSize: 11 }}>
+            {pipelineRunning ? 'Running...' : activePipeline.comparisonOnly ? 'Load All' : `Run ${activePipeline.shortLabel}`}
+          </button>
+          <PipelineBadge status={activeStatus} />
+          {uploadedFile && <div style={{ fontSize: 10, color: 'var(--muted)', wordBreak: 'break-all' }}>{uploadedFile.name}</div>}
+        </div>
+
+        <div className="sidebar-section-label">Query</div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <input
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder={activePipeline.comparisonOnly ? 'Compare across methods...' : 'Ask a question...'}
+            disabled={!activePipeline.comparisonOnly && !corpusReady && pipelineStatus !== 'green'}
+            style={{ border: '1px solid var(--line)', borderRadius: 10, background: 'var(--card-alt)', color: 'var(--ink)', padding: '10px 12px', fontSize: 12, fontFamily: 'inherit' }}
+          />
+          <button className="ask-button" onClick={handleAskQuestion}
+            disabled={!activePipeline.comparisonOnly && !corpusReady && pipelineStatus !== 'green'}
+            style={{ opacity: !activePipeline.comparisonOnly && !corpusReady && pipelineStatus !== 'green' ? 0.5 : 1, fontSize: 11 }}>
+            {activePipeline.comparisonOnly ? 'Compare All' : 'Search'}
+          </button>
+        </div>
+
+        <div className="sidebar-footer">
+          {sourceName}<br />
+          {Object.entries(methodStatuses).filter(([, s]) => s === 'green').length} / {RUNNABLE_METHODS.length} methods ready
+        </div>
+      </aside>
+
+      <main className="app-main">
+        <header className="hero" style={{ marginBottom: 18 }}>
+          <h2>{activePipeline.label}</h2>
+          <p>{activePipeline.note}</p>
+        </header>
+
+        {!chunks.length && !activePipeline.comparisonOnly && (
+          <div className="empty-state">
+            <p>Ready to start</p>
+            <span>Upload a PDF, pick a retrieval mode, and run the pipeline.</span>
+          </div>
+        )}
+
+        {!activePipeline.comparisonOnly && (
+          <WorkspaceSummary chunks={chunks} queryResult={queryResult} visData={visData} activePipeline={activePipeline} sourceName={sourceName} />
+        )}
+
+        <section className="workspace-topbar">
+          <ConsolePanel logs={logs} />
+        </section>
+
+        {question && queryResult && (
+          <EvaluationPanel queryText={question} />
+        )}
+
+        {pipelineMode === 'compare' ? (
+          <main className="compare-workspace">
+            <MethodComparison methods={RUNNABLE_METHODS} comparisonData={comparisonData} evalData={null} />
+          </main>
+        ) : (
+          <div className="main project-layout">
+            <section className="main-visual">
+              <div className="method-title-row">
+                <h3>{activePipeline.label}</h3>
+                <InfoButton text={activePipeline.note} />
+              </div>
+              {pipelineMode === 'vectorless' ? (
+                <VectorlessMarkdownAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'graph' ? (
+                <GraphRagAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'agentic' ? (
+                <AgenticRagAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'multihop' ? (
+                <MultiHopRagAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'rerank' ? (
+                <RerankAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'hybrid' ? (
+                <HybridAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'bm25' ? (
+                <div className="panel bm25-hero" style={{ display: 'grid', gap: 12 }}>
+                  <h3>BM25 Evidence Overview</h3>
+                  <p className="coverage-note">Lexical retrieval ranks chunks by exact keyword overlap.</p>
+                  <div className="bm25-hero-grid">
+                    <div className="bm25-hero-stat"><span>Query terms</span><strong>{(visData?.query_terms || queryResult?.query_terms || []).length}</strong></div>
+                    <div className="bm25-hero-stat"><span>Missing terms</span><strong>{(visData?.missing_query_terms || queryResult?.missing_query_terms || []).length}</strong></div>
+                    <div className="bm25-hero-stat"><span>Retrieved</span><strong>{queryResult?.results?.length || 0}</strong></div>
+                    <div className="bm25-hero-stat"><span>Evidence mode</span><strong>{activePipeline.evidenceMode}</strong></div>
+                  </div>
+                  <div className="bm25-hero-tags">
+                    {(visData?.query_terms || queryResult?.query_terms || []).map((term) => <span key={term} className="bm25-term-tag">{term}</span>)}
+                  </div>
+                  {((visData?.missing_query_terms || queryResult?.missing_query_terms || []).length > 0) && (
+                    <div className="bm25-warning">Missing query terms: {(visData?.missing_query_terms || queryResult?.missing_query_terms || []).join(', ')}</div>
+                  )}
+                </div>
+              ) : (
+                <EmbeddingConstellation chunks={chunks} queryResult={queryResult} visData={visData} />
+              )}
+            </section>
+
+            <aside className="main-analytics">
+              {pipelineMode === 'vectorless' ? (
+                <div className="panel vectorless-side-panel">
+                  <h3>Navigation Evidence</h3>
+                  <div className="vectorless-path-list">
+                    {(queryResult?.selected_path || []).map((item, index) => (
+                      <div key={`${item.id}-${index}`} className="vectorless-path-row">
+                        <span>{index + 1}</span><div><strong>{item.label}</strong><small>{item.type}</small></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'graph' ? (
+                <div className="panel graph-side-panel">
+                  <h3>Graph Evidence Trail</h3>
+                  <div className="graph-evidence-list">
+                    {(queryResult?.path_explanation || []).slice(0, 8).map((path, index) => (
+                      <div key={`${path.entity}-${path.section}-${index}`} className="graph-evidence-card">
+                        <strong>{path.entity || 'Query'} -&gt; {path.related_entity || path.edge_type}</strong>
+                        <p>{path.section || 'Evidence section'}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'rerank' ? (
+                <div className="panel rerank-evidence-panel">
+                  <h3>Reranked Final Evidence</h3>
+                  <div className="hybrid-results">
+                    {(queryResult?.results || []).map((result) => (
+                      <div key={result.chunk_id} className="hybrid-result-row">
+                        <span className={`source-badge ${result.movement_label}`}>{result.movement > 0 ? `+${result.movement}` : result.movement}</span>
+                        <div>
+                          <strong>#{result.rank} page {result.page_number} | {result.reranker_score?.toFixed?.(3) ?? result.reranker_score}</strong>
+                          <p>{result.chunk_text_preview}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'agentic' ? (
+                <div className="panel agentic-side-panel">
+                  <h3>Agent Decisions</h3>
+                  <div className="agent-scratchpad compact">
+                    {(queryResult?.scratchpad || []).map((line, index) => (
+                      <div key={`${line}-${index}`}><span>{String(index + 1).padStart(2, '0')}</span><p>{line}</p></div>
+                    ))}
+                  </div>
+                  <h3 style={{ marginTop: 12 }}>Rejected Evidence</h3>
+                  <div className="agent-rejected-pile compact">
+                    {(queryResult?.rejected_evidence || []).slice(0, 5).map((item) => (
+                      <div key={item.chunk_id}><strong>P{item.page_number}</strong><span>{item.reason}</span></div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'multihop' ? (
+                <div className="panel multihop-side-panel">
+                  <h3>Bridge Notes</h3>
+                  <div className="bridge-term-strip side">
+                    {(queryResult?.bridge_terms || []).map((term) => <i key={term}>{term}</i>)}
+                  </div>
+                  <div className="hop-list compact">
+                    {(queryResult?.hops || []).map((hop) => (
+                      <div key={hop.hop}><span>Hop {hop.hop}</span><strong>{hop.query}</strong><p>{hop.purpose}</p></div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'hybrid' ? (
+                <div className="panel hybrid-evidence-panel">
+                  <h3>Hybrid Final Evidence</h3>
+                  <div className="hybrid-results">
+                    {(queryResult?.results || []).map((result) => (
+                      <div key={result.chunk_id} className="hybrid-result-row">
+                        <span className={`source-badge ${result.source}`}>{result.source}</span>
+                        <div>
+                          <strong>#{result.rank} page {result.page_number} | {result.hybrid_score?.toFixed?.(3) ?? result.hybrid_score}</strong>
+                          <p>{result.chunk_text_preview}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : pipelineMode === 'bm25' ? (
+                <Bm25Analytics chunks={chunks} queryResult={queryResult} visData={visData} />
+              ) : (
+                <NaiveRagAnalytics chunks={chunks} queryResult={queryResult} visData={visData} />
+              )}
+            </aside>
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}

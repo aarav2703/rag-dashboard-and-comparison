@@ -1,0 +1,12 @@
+torch
+numpy
+pandas
+pymupdf
+sentence-transformers
+umap-learn
+scikit-learn
+jina-embeddings
+notebook
+flask
+flask-cors
+faiss-cpu
