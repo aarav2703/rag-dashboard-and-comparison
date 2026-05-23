@@ -1,0 +1,401 @@
+===============================================================================
+RAG COMPARISON — UPGRADE PLAN
+===============================================================================
+Goal: Multimodal PDF understanding (images + tables), better embeddings,
+      GPU-optimized, within 8GB VRAM.
+───────────────────────────────────────────────────────────────────────────────
+
+PREREQUISITES
+───────────────────────────────────────────────────────────────────────────────
+
+1. Verify your conda env has GPU access:
+   > conda activate rag-multimodal
+   > python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+   Should print "True <your GPU name>".
+   If False: conda install pytorch pytorch-cuda=12.1 -c pytorch
+
+2. Install new dependencies:
+   > pip install pymupdf4llm   # lightweight marker-pdf alternative (already has pymupdf)
+   > pip install jina-clip-v2  # if doing multimodal images
+
+   Alternative heavier option:
+   > pip install marker-pdf    # slower but better table extraction
+   Use pymupdf4llm for speed, marker-pdf for best quality.
+
+===============================================================================
+STEP 1 — Enable fp16 for GPU (critical before any model swap)
+───────────────────────────────────────────────────────────────────────────────
+File: notebooks/shared_rag_store.py
+Lines: 34-39 and 44-49
+
+Current code (line 34-39):
+        try:
+            model = SentenceTransformer(
+                model_name,
+                device=str(device),
+                trust_remote_code=trust_remote_code,
+                local_files_only=True,
+            )
+
+Change to:
+        try:
+            model = SentenceTransformer(
+                model_name,
+                device=str(device),
+                trust_remote_code=trust_remote_code,
+                model_kwargs={"torch_dtype": torch.float16},
+                local_files_only=True,
+            )
+
+Same change at lines 44-49 (the online fallback).
+
+Why: Without this, jina-embeddings-v3 (~2.2GB in fp32) + a batch of 64 chunks
+will push past 8GB and OOM. fp16 cuts memory in half. all-MiniLM-L6-v2 is small
+enough to not need it, but setting it now prevents OOM when you swap models.
+
+===============================================================================
+STEP 2 — Swap embedding model to jina-embeddings-v3
+───────────────────────────────────────────────────────────────────────────────
+File: notebooks/shared_rag_store.py
+Line: 18-20
+
+Current:
+    MODEL_CANDIDATES = [
+        ("sentence-transformers/all-MiniLM-L6-v2", False),
+    ]
+
+Change to:
+    MODEL_CANDIDATES = [
+        ("jinaai/jina-embeddings-v3", True),
+    ]
+
+What this does:
+  - Dimensions: 384 → 1024
+  - MTEB score: ~60 → ~66
+  - Native task-specific encoding (no manual instruction prefix needed)
+
+Affects all 6 vector-using modes: naive, hybrid, rerank, graph, agentic, multihop.
+Does NOT affect bm25 or vectorless (they don't use vectors).
+
+Time cost:
+  - Corpus build: ~1.5-2x slower encode (1024-dim vs 384-dim)
+  - Query encode: negligible (single sentence)
+  - FAISS search: marginally slower on IndexFlatIP (wider vectors)
+    If noticeable, switch from IndexFlatIP to IndexIVFFlat(nlist=100):
+    shared_rag_store.py line 152: index = faiss.IndexIVFFlat(faiss.IndexFlatIP(dim), dim, 100)
+    Also: index.train(embeddings) before index.add(embeddings)
+
+===============================================================================
+STEP 3 — Add task parameter at query time
+───────────────────────────────────────────────────────────────────────────────
+File: backend.py
+Line: 507-512
+
+Current:
+    query_embedding = model.encode(
+        [query_text],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    ).astype("float32")
+
+Change to:
+    query_embedding = model.encode(
+        [query_text],
+        task="retrieval.query",
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    ).astype("float32")
+
+And in shared_rag_store.py line 115-121 (corpus build time):
+    embeddings = model.encode(
+        texts,
+        batch_size=batch_size,
+        task="retrieval.passage",
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+
+Why: jina-embeddings-v3 supports task-specific LoRA adapters baked in.
+"retrieval.query" at query time and "retrieval.passage" at index time aligns
+the embedding space for better retrieval. Without these, the model defaults
+to a generic embedding space that's suboptimal for search.
+
+===============================================================================
+STEP 4 — Replace text extraction with marker-pdf
+───────────────────────────────────────────────────────────────────────────────
+File: notebooks/shared_rag_store.py
+Function: extract_pages() — lines 56-69
+
+What to do: Replace the entire function.
+
+Current:
+    def extract_pages(pdf_path: Path) -> list[dict]:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        pages = []
+        for page_index in range(doc.page_count):
+            page = doc.load_page(page_index)
+            pages.append({
+                "page_number": page_index + 1,
+                "text": (page.get_text("text") or "").strip(),
+            })
+        return pages
+
+Replace with (using pymupdf4llm — same dependency, no install needed):
+    def extract_pages(pdf_path: Path) -> list[dict]:
+        import pymupdf4llm
+        md_text = pymupdf4llm.to_markdown(str(pdf_path), show_progress=False)
+        # md_text is full-document markdown with ---page--- separators
+        pages = []
+        current_page = 1
+        for block in md_text.split("---page---"):
+            block = block.strip()
+            if not block:
+                continue
+            pages.append({
+                "page_number": current_page,
+                "text": block,
+            })
+            current_page += 1
+        return pages
+
+Or (using marker-pdf — better tables, slower):
+    def extract_pages(pdf_path: Path) -> list[dict]:
+        from marker.converters.pdf import PdfConverter
+        from marker.renderers.markdown import MarkdownOutput
+        converter = PdfConverter(artifact_dict={"pdf": str(pdf_path)})
+        rendered = converter.convert()
+        full_text = rendered.markdown
+        pages = []
+        current_page = 1
+        for block in full_text.split("---page---"):
+            block = block.strip()
+            if not block:
+                continue
+            pages.append({
+                "page_number": current_page,
+                "text": block,
+            })
+            current_page += 1
+        return pages
+
+Why this matters for each mode:
+  - naive/hybrid/rerank/graph/agentic/multihop: Table data becomes clean
+    markdown text (instead of garbled chars), so semantic embeddings capture
+    actual cell values and column headers.
+  - bm25: Table rows like "| Q3 | $2.1M |" become query-matchable tokens.
+  - vectorless: Gets a real markdown document tree (real headings, sections),
+    instead of a fake one built from arbitrary chunks.
+  - graph: Entity extraction works on clean structured text.
+
+Time cost: +10-30s at corpus build time. Zero per-query cost.
+
+===============================================================================
+STEP 5 — Improve chunking (sentence-respecting boundaries)
+───────────────────────────────────────────────────────────────────────────────
+File: notebooks/shared_rag_store.py
+Function: chunk_page_text() — lines 72-87
+
+Current: 650-word sliding window, 50-word overlap. Splits words mid-sentence.
+
+Replace with:
+    def chunk_page_text(text: str, chunk_words: int = 400, overlap_words: int = 30) -> list[str]:
+        import re
+        # Split on markdown paragraph boundaries first (marker-pdf output)
+        paragraphs = re.split(r'\n\n+', text.strip())
+        chunks = []
+        buffer = []
+        buffer_len = 0
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            para_words = para.split()
+            # If a single paragraph is too long, split on sentences
+            if len(para_words) > chunk_words:
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if not sent:
+                        continue
+                    sw = len(sent.split())
+                    if buffer_len + sw > chunk_words and buffer:
+                        chunks.append(' '.join(buffer))
+                        # overlap: keep last ~overlap_words from buffer
+                        overlap = buffer[-overlap_words:] if overlap_words < len(buffer) else buffer
+                        buffer = list(overlap)
+                        buffer_len = len(overlap)
+                    buffer.append(sent)
+                    buffer_len += sw
+            else:
+                if buffer_len + len(para_words) > chunk_words and buffer:
+                    chunks.append(' '.join(buffer))
+                    overlap = buffer[-overlap_words:] if overlap_words < len(buffer) else buffer
+                    buffer = list(overlap)
+                    buffer_len = len(overlap)
+                buffer.append(para)
+                buffer_len += len(para_words)
+        if buffer:
+            chunks.append(' '.join(buffer))
+        return chunks
+
+Also change line 72 default: chunk_words: int = 400, overlap_words: int = 30
+
+Why:
+  - Chunks align with paragraph/sentence boundaries (not arbitrary word cuts)
+  - Smaller chunks (400 vs 650) give finer-grained retrieval
+  - No time cost: model.encode() scales with total word count, not chunk count.
+    650-word chunks = N words total. 400-word chunks = same N words total.
+    The regex split overhead is microseconds vs seconds for encoding.
+
+===============================================================================
+STEP 6 — Add image extraction and jina-clip embedding (optional, multimodal)
+───────────────────────────────────────────────────────────────────────────────
+File: notebooks/shared_rag_store.py
+Add after build_chunks() or inside build_store()
+
+How it works:
+  1. After extract_pages(), use fitz to extract images from each page
+  2. Save images to a directory
+  3. Load jina-clip-v2 model
+  4. Embed images + their captions together
+  5. Add image entries to chunks list alongside text chunks
+  6. They all go into the same FAISS index
+
+Add a new function:
+    def extract_and_embed_images(pdf_path: Path, text_chunks: list[dict],
+                                  model, batch_size: int = 16) -> list[dict]:
+        import fitz
+        import os
+        from PIL import Image
+        import io
+
+        doc = fitz.open(str(pdf_path))
+        image_chunks = []
+        image_dir = FRONTEND_DATA_DIR / "images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+        for page_idx in range(doc.page_count):
+            page = doc.load_page(page_idx)
+            images_on_page = page.get_images(full=True)
+            for img_idx, img_info in enumerate(images_on_page):
+                xref = img_info[0]
+                base_image = doc.extract_image(xref)
+                img_bytes = base_image["image"]
+                # Skip tiny images (icons, bullets)
+                if len(img_bytes) < 5000:
+                    continue
+                # Save image
+                ext = base_image["ext"]
+                img_filename = f"p{page_idx+1}_i{img_idx}.{ext}"
+                img_path = image_dir / img_filename
+                with open(img_path, "wb") as f:
+                    f.write(img_bytes)
+
+                # Embed with jina-clip
+                image = Image.open(io.BytesIO(img_bytes))
+                embedding = model.encode(
+                    [image],
+                    batch_size=batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                )[0]
+
+                image_chunks.append({
+                    "chunk_id": str(uuid.uuid4()),
+                    "chunk_type": "image",
+                    "page_number": page_idx + 1,
+                    "image_path": str(img_path.relative_to(FRONTEND_DATA_DIR.parent)),
+                    "chunk_text": f"[Image: {img_filename} on page {page_idx+1}]",
+                    "word_count": 0,
+                    "preview": f"[Image: page {page_idx+1}]",
+                    "embedding": embedding.astype("float32"),
+                })
+        return image_chunks
+
+Then in build_store():
+    - Load jina-clip model: clip_model = SentenceTransformer("jinaai/jina-clip-v2", ...)
+    - Call extract_and_embed_images(pdf_path, chunks, clip_model)
+    - Append image_chunks to chunks list
+    - Build FAISS index from all embeddings (text + image)
+
+And at query time (backend.py), the same FAISS index now contains image vectors.
+A query about "chart" or "diagram" will return both text chunks and images.
+
+Requirement: pip install jina-clip-v2 Pillow
+Time cost: +5-10s per PDF at corpus build. Zero per-query.
+
+===============================================================================
+STEP 7 — Image display in frontend (optional)
+───────────────────────────────────────────────────────────────────────────────
+File: frontend/src/App.jsx
+
+When displaying results, detect chunk_type === "image" and render an <img> tag
+instead of text preview. The image path is at chunk["image_path"] and is relative
+to frontend/public/data/.
+
+Add to the result rendering component:
+    {result.chunk_type === "image" ? (
+      <img src={result.image_path} alt={`Page ${result.page_number}`}
+           style={{maxWidth: "100%", borderRadius: "6px"}} />
+    ) : (
+      <p>{result.chunk_text_preview}</p>
+    )}
+
+===============================================================================
+VERIFICATION & TESTING
+───────────────────────────────────────────────────────────────────────────────
+
+After each step, run:
+  1. Corpus rebuild:
+     > conda run -n rag-multimodal python notebooks/00_build_faiss_corpus.py
+       --input data/MachineLearningNotes.pdf
+
+  2. Check backend_or_exports/current_corpus/metadata.json to confirm:
+     - embedding_model: jinaai/jina-embeddings-v3
+     - embedding_device: cuda
+
+  3. Start backend and test all 8 modes with a sample query.
+
+  4. Run the evaluation endpoint (POST /api/evaluate with a query that has
+     ground truth in notebooks/evaluation_data.json).
+
+  5. Compare NDCG@5, MRR, Recall@5 before vs after each upgrade step.
+     This quantifies improvement per change.
+
+===============================================================================
+PERFORMANCE ON 8GB VRAM — MEMORY BUDGET
+───────────────────────────────────────────────────────────────────────────────
+
+With fp16 enabled (Step 1):
+
+  jina-embeddings-v3 (fp16)         ~1.1 GB
+  jina-clip-v2 (fp16, if added)     ~1.3 GB
+  Both models in memory              ~2.4 GB
+  SentenceTransformer inference      ~0.5-1.0 GB (activations)
+  FAISS index (CPU)                  0 GB (stays on CPU RAM)
+  -----------------------------
+  Total GPU                          ~3.0-3.5 GB
+  Headroom                           4.5+ GB  ← safe
+
+With fp32 (current config):
+  jina-embeddings-v3 (fp32)         ~2.2 GB
+  + batch encoding                   ~2-3 GB additional
+  -----------------------------
+  Total                              ~4-5+ GB
+  + jina-clip                        OOM risk
+
+Conclusion: fp16 is mandatory for jina-v3 on 8GB. And you CAN run both
+jina-v3 + jina-clip simultaneously on 8GB in fp16.
+
+===============================================================================
+SUMMARY — FILES TOUCHED
+───────────────────────────────────────────────────────────────────────────────
+
+  notebooks/shared_rag_store.py     — Steps 1, 2, 4, 5, 6 (core changes)
+  backend.py                        — Steps 3 (query task param)
+  frontend/src/App.jsx              — Step 7 (image display, optional)
+  requirements.txt                  — Add: jina-clip-v2, Pillow, marker-pdf (optional)

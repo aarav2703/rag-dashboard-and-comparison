@@ -1,0 +1,404 @@
+Frontend Critique and Upgrade Plan
+==================================
+
+Goal
+----
+Make each frontend page clearly demonstrate the retrieval method it represents. The current app has many visuals, but some visuals do not yet explain the method's actual advantage. The upgrade direction should be: fewer generic cards, stronger main visuals, better evidence flow, and clearer comparison.
+
+
+1. Naive Vector RAG Page
+-----------------------
+
+Harsh but fair critique:
+- The interactive embedding space is the right star visual for naive vector RAG.
+- The page correctly shows semantic retrieval as a spatial idea, which is good.
+- The weakness is that the visual can look impressive without explaining why a chunk was retrieved.
+- The similarity bars are useful, but they are separated from the spatial view instead of being tightly connected.
+- The citation coverage map is helpful, but it is more of a support visual than a main visual.
+- The old failure attribution flow was not useful because it was not based on real failure labels.
+
+What is already good:
+- Embedding constellation fits the method well.
+- Similarity bars make the ranking understandable.
+- Answer panel below the graph is the right placement.
+- Zoom/pan controls are a good practical addition.
+- Citation coverage is a reasonable secondary diagnostic.
+
+5 suggested visuals:
+1. Query-to-neighbor radius view:
+   Show concentric circles around the query point. Retrieved chunks inside the closest radius are highlighted. This makes "nearest neighbor retrieval" visually obvious.
+
+2. Top-k ranking rail:
+   A vertical rail next to the constellation showing rank 1 to rank 10. Hovering a rank highlights the point in the embedding space.
+
+3. Similarity decay curve:
+   Plot rank on the x-axis and cosine similarity on the y-axis. A steep drop suggests confident retrieval; a flat curve suggests uncertainty.
+
+4. Retrieved vs non-retrieved cluster boundary:
+   Draw a soft boundary around retrieved points. This helps show whether retrieval is concentrated or scattered.
+
+5. Evidence citation overlay:
+   On each retrieved chunk, show whether it was used by the answer/critic. This separates "retrieved" from "actually useful."
+
+
+2. BM25 Lexical Retrieval Page
+------------------------------
+
+Harsh but fair critique:
+- BM25 is currently too spread across small cards.
+- The method is lexical, so the page should make exact token matching the star.
+- The evidence highlighter is good and should stay important.
+- The query-term by chunk matrix is probably the best main visual, but it is currently treated as a secondary card.
+- The page heatmap and rarity bars are useful, but they should support the main matrix rather than compete with it.
+- The page layout previously felt squeezed because BM25 analytics lived in the side rail.
+
+What is already good:
+- Highlighted terms inside retrieved chunks directly show how BM25 works.
+- Term rarity bars explain IDF in a simple way.
+- Missing-term warning is useful.
+- Page heatmap helps connect lexical evidence to document location.
+- Query-term matrix is exactly the right direction.
+
+5 suggested visuals:
+1. Main Query-Term x Chunk Heatmap:
+   Rows are retrieved chunks, columns are query terms, and cell intensity is hit count or BM25 contribution. This should be the star visual.
+
+2. BM25 Formula Breakdown Card:
+   For the selected chunk, show term frequency, document frequency, IDF, length normalization, and final score contribution.
+
+3. Token Match Strip:
+   A horizontal strip of query tokens where each token shows how many retrieved chunks matched it. Missing tokens appear red.
+
+4. Top Chunk Contribution Waterfall:
+   For the top result, show each matched token adding to the final BM25 score.
+
+5. Lexical Blind Spot Panel:
+   Show semantically relevant terms that BM25 misses because the exact wording is different. This would honestly show BM25's limitation.
+
+
+3. Hybrid RAG Page
+------------------
+
+Harsh but fair critique:
+- Hybrid already has a good conceptual structure: vector pool, BM25 pool, overlap, and fused ranking.
+- The Sankey is a good fit but currently feels decorative unless the counts are strongly tied to selected evidence.
+- The overlap matrix is useful, but it should be visually central because hybrid is mostly about "where two retrieval signals agree."
+- The rank fusion bump chart is good but needs clearer before/after meaning.
+- Source badges are helpful, but a list of cards alone does not strongly explain fusion.
+
+What is already good:
+- Dual-source merge Sankey is method-specific.
+- Overlap filter is useful.
+- Rank fusion table helps debug why a chunk wins.
+- Source labels make the final evidence readable.
+- The page already has the right ingredients.
+
+5 suggested visuals:
+1. Three-Zone Candidate Map:
+   Show Vector-only, Both, and BM25-only as three large zones. Final selected chunks appear inside zones by rank.
+
+2. Fusion Score Decomposition:
+   For each final chunk, show vector rank contribution + BM25 rank contribution = hybrid score.
+
+3. Agreement Strength Ladder:
+   Rank chunks by how much the two systems agree. Chunks found by both should be visually privileged.
+
+4. Source Conflict View:
+   Show chunks that vector ranks high but BM25 ranks low, and vice versa. This explains why hybrid can help.
+
+5. Before/After Fusion Board:
+   Three columns: Vector Top-10, BM25 Top-10, Hybrid Top-10, with connecting lines for shared chunks.
+
+
+4. Rerank RAG Page
+------------------
+
+Harsh but fair critique:
+- This is one of the stronger pages because the slopegraph matches the method.
+- The page clearly shows movement from first-stage retrieval to final ranking.
+- The score histogram is useful, but less important than rank movement.
+- The before/after table is useful but duplicates the slopegraph.
+- The promoted/demoted cards are good, but they should explain why the move happened.
+
+What is already good:
+- Rank movement slopegraph is highly appropriate.
+- Promoted/demoted colors communicate the reranker effect quickly.
+- Summary counts are useful.
+- Hover card is helpful.
+- The page has a clear story.
+
+5 suggested visuals:
+1. Rerank Justification Panel:
+   For the selected moved chunk, show which features caused promotion or demotion.
+
+2. Candidate Funnel:
+   Show initial candidate pool -> reranker scoring -> final top-k. This makes the pipeline shape clear.
+
+3. Promotion/Demotion Quadrant:
+   X-axis initial score, y-axis reranker score. Promoted chunks land high; demoted chunks fall low.
+
+4. Rank Movement Animation:
+   Animate chunks moving from initial ranks to final ranks when the query completes.
+
+5. False Positive Demotion View:
+   Show chunks that looked good in first-stage retrieval but were demoted because they were weak evidence.
+
+
+5. GraphRAG-lite Page
+---------------------
+
+Harsh but fair critique:
+- The graph visual currently looks like a generic graph and can become a hairball.
+- Answer subgraph and neighborhood are too similar visually.
+- Click-to-pin/hover text previously covered the graph, which made the interaction feel broken.
+- Graph evidence trail and query path explanation are conceptually too similar.
+- The page should focus less on "many nodes" and more on "how the query moved through relationships."
+- HotpotQA results show this method is weak right now, so the frontend should be honest and diagnostic.
+
+What is already good:
+- GraphRAG should have a relationship visual, so the page direction is correct.
+- Answer subgraph vs full neighborhood is a useful distinction.
+- Entity tags in evidence cards are useful.
+- Zoom/pan controls are needed and now belong here.
+- Query path flow is better than another list of evidence cards.
+
+5 suggested visuals:
+1. Query Path Flowchart:
+   Query terms/entities -> matched entity -> related entity/section -> evidence chunk -> answer. This should be the star visual.
+
+2. Entity Bridge Map:
+   Show only the entities that connect the question to retrieved chunks. Avoid rendering the full graph first.
+
+3. Subgraph Confidence Layers:
+   Separate nodes into query entities, bridge entities, evidence sections, and answer chunks with clear bands.
+
+4. Dead-End Relationship Panel:
+   Show entity paths that were explored but did not lead to final evidence. This would explain failure modes.
+
+5. Graph vs Text Retrieval Comparison:
+   Show when graph retrieval found evidence that vector/BM25 missed, and when it failed. This is important because GraphRAG-lite currently underperforms.
+
+
+6. Vectorless Markdown Page
+---------------------------
+
+Harsh but fair critique:
+- The document tree is a correct visual for vectorless retrieval.
+- The problem is that a full tree can be too big and hard to read.
+- Click-to-collapse is useful, but it can feel strange if the tree is not clearly centered or if labels overlap.
+- The selected path is the real value of this method, not the whole tree.
+- Section confidence heatmap is good, but it should connect directly to the selected route.
+
+What is already good:
+- Document tree matches the method.
+- Breadcrumb selected path is useful.
+- Section confidence heatmap is a good structural diagnostic.
+- Structural evidence cards are clear.
+- Zoom/pan controls are appropriate.
+
+5 suggested visuals:
+1. Document Route Map:
+   Show root -> section -> paragraph -> answer as a clean path. This should be the star visual, with the full tree secondary.
+
+2. Skipped Branches View:
+   Show which sections were ignored and why. This helps explain vectorless navigation.
+
+3. Section Confidence Bar Tree:
+   Instead of a large node tree, show sections as nested bars with confidence intensity.
+
+4. Path-vs-Evidence Alignment:
+   Show whether final retrieved chunks actually come from the selected structural path.
+
+5. Structural Table of Contents Lens:
+   Render a compact table of contents where selected sections glow and unrelated branches fade.
+
+
+7. Agentic RAG Page
+-------------------
+
+Harsh but fair critique:
+- The current node flow is not strong enough because it still looks like a generic process diagram.
+- Agentic RAG is about decisions, retries, tool choices, and critique, so the visual should emphasize control logic.
+- The scratchpad is useful but can look like raw logs.
+- The accepted/rejected evidence panels are good, but they need to connect to the decision that accepted or rejected them.
+- Duplicate nodes were previously making this page more confusing than it needed to be.
+
+What is already good:
+- Scratchpad trace is a good fit.
+- Tool-use Gantt timeline is appropriate.
+- Accepted vs rejected evidence is method-specific.
+- Replay button is a good idea.
+- The page already has the right conceptual material.
+
+5 suggested visuals:
+1. Decision Timeline:
+   Plan -> choose retriever -> retrieve -> critique -> retry/accept. Each step shows input, decision, and output.
+
+2. Critic Gate Diagram:
+   Retrieved evidence flows into answer draft, then critic accepts/rejects. Rejected evidence branches off with reasons.
+
+3. Tool Selection Board:
+   Show available tools and which tool the agent selected for this query, with a short reason.
+
+4. Retry Loop Visualization:
+   If a retry happened, show original query -> reformulated query -> improved evidence. This is the core agentic story.
+
+5. Evidence Triage Board:
+   Three columns: accepted, rejected, and uncertain evidence. Each card should show the agent's reason.
+
+
+8. Multi-hop RAG Page
+---------------------
+
+Harsh but fair critique:
+- The current multi-hop node graph is not strong enough.
+- Multi-hop retrieval is not mainly about nodes; it is about a bridge from one fact to another.
+- The bridge terms are useful but should be visually central.
+- Hop queries are useful but currently read like notes.
+- The page needs a left-to-right reasoning board.
+
+What is already good:
+- Hop query cards are useful.
+- Bridge terms are the right concept.
+- Bridge evidence table is useful for debugging.
+- Final evidence cards are clear.
+- Animation around bridge terms can help if it is tied to the reasoning path.
+
+5 suggested visuals:
+1. Two-Hop Bridge Board:
+   Left: original question. Middle-left: hop 1 evidence. Center: extracted bridge terms. Middle-right: hop 2 evidence. Right: final answer.
+
+2. Bridge Term Extraction Lens:
+   Highlight bridge terms inside hop 1 evidence and show how they become the hop 2 query.
+
+3. Hop Evidence Alignment:
+   Show which final chunks came from hop 1, hop 2, or both.
+
+4. Missing-Hop Warning:
+   If only one supporting fact is found, show which hop failed and what bridge was missing.
+
+5. Multi-hop Proof Chain:
+   A compact proof-style layout: Fact A -> bridge entity -> Fact B -> answer.
+
+
+9. Compare All Page
+-------------------
+
+Harsh but fair critique:
+- Compare All currently has the right ambition, but it risks becoming a wall of cards.
+- The evidence overlap matrix is useful and should stay.
+- The answer/evidence table is useful but should be more central.
+- Method cards are helpful for detail, but they should not be the first thing the user sees.
+- The best comparison page should answer: Which method won, why did it win, and what evidence did each method use?
+
+Best comparison design:
+1. Top summary row:
+   Show winner by evidence quality, fastest method, most conservative method, and most overlapping method.
+
+2. Method leaderboard:
+   Rank methods for the current query using retrieved evidence quality signals: top score, critic verdict, evidence count, and overlap with other methods.
+
+3. Evidence overlap matrix:
+   Keep the matrix, but add row/column hover to highlight shared chunks.
+
+4. Shared evidence spine:
+   Show chunks retrieved by many methods as a central spine. Each method gets a colored line to the chunks it retrieved.
+
+5. Answer comparison table:
+   Rows are methods. Columns are answer, critic verdict, top page, top score, evidence count, and unique evidence.
+
+6. Disagreement panel:
+   Show where methods disagree: unique top chunks, missing pages, rejected critic answers, or different answer text.
+
+7. Method detail drawer:
+   Clicking a method opens its full method-specific mini visual. This keeps the page from becoming too crowded.
+
+
+10. HotpotQA Benchmark Results Page
+-----------------------------------
+
+Purpose:
+Add a separate "Benchmark Results" page so the project can show academic evaluation separately from interactive PDF querying.
+
+Why this matters:
+- The app currently mixes demo mode and benchmark mode.
+- HotpotQA results should be presented as a proper experiment.
+- A separate page makes the project look more serious and makes the benchmark reproducible.
+
+Recommended page sections:
+1. Experiment summary:
+   Dataset, config, split, number of queries, chunk count, top-k, number of modes, run time, and error count.
+
+2. Leaderboard table:
+   Show mode, NDCG@5, Recall@5, Recall@10, MRR, MAP, supporting fact hit rate, and all facts found.
+
+3. Metric selector:
+   Let the user rank methods by NDCG@5, Recall@10, MAP, MRR, or all supporting facts found.
+
+4. Mode comparison chart:
+   Use grouped bars or a radar chart for the main metrics. Avoid too many metrics at once.
+
+5. Type breakdown:
+   HotpotQA has bridge and comparison question types. Show each mode's performance by type.
+
+6. Query-level inspection table:
+   Each row is a HotpotQA question. Columns include type, gold answer, total supporting facts, per-method hit count, and all-facts-found flag.
+
+7. Failure analysis:
+   Show the hardest queries where most methods failed. Include missing supporting facts.
+
+8. Best/worst examples:
+   For each method, show one query it handled well and one query it failed.
+
+9. Reproducibility box:
+   Show exact commands from HOTPOT_BENCHMARK_COMMANDS.txt and paths to raw/metrics JSON.
+
+10. Interpretation paragraph:
+   Explain that these are retrieval metrics, not final answer correctness metrics.
+
+Suggested benchmark page visuals:
+1. Leaderboard bar chart by selected metric.
+2. Heatmap of methods x metrics.
+3. Bridge vs comparison grouped bars.
+4. Per-query all-supporting-facts-found strip.
+5. Failure cluster table showing queries where every method missed at least one fact.
+
+
+Implementation Priority
+-----------------------
+
+Priority 1:
+- BM25 main heatmap.
+- Graph query path flowchart.
+- Multi-hop two-hop bridge board.
+- Benchmark results page.
+
+Priority 2:
+- Agentic decision timeline and critic gate.
+- Vectorless document route map.
+- Compare All shared evidence spine.
+
+Priority 3:
+- Naive similarity decay curve.
+- Hybrid source conflict view.
+- Rerank justification panel.
+
+
+General Layout Rules Going Forward
+----------------------------------
+
+- Each method page should have one star visual, not five equal cards.
+- Put the answer panel below or beside the star visual, not above everything.
+- Avoid generic node-link graphs unless the method genuinely needs them.
+- Use cards for repeated evidence items, but do not make the whole page a pile of cards.
+- Every visual should answer a method-specific question:
+  - Naive: Which chunks are nearest to the query?
+  - BM25: Which exact terms caused retrieval?
+  - Hybrid: Where do semantic and lexical retrieval agree?
+  - Rerank: Which chunks moved and why?
+  - Graph: Which relationship path led to evidence?
+  - Vectorless: Which document route led to evidence?
+  - Agentic: What decision did the agent make at each step?
+  - Multi-hop: What bridge connected the two facts?
+  - Compare: Which method found the best evidence, and how do they disagree?
+  - Benchmark: Which method performs best across real HotpotQA questions?

@@ -12,25 +12,53 @@ function deterministicCoord(id, scale) {
   return ((((h % 10000) / 10000) * 2) - 1) * scale
 }
 
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
 export default function EmbeddingConstellation({ chunks, queryResult, visData }) {
   const [hoverId, setHoverId] = useState(null)
   const [transform, setTransform] = useState(zoomIdentity)
   const svgRef = useRef(null)
+  const zoomRef = useRef(null)
   const width = 920
   const height = 620
 
   useEffect(() => {
     if (!svgRef.current) return
     const behavior = zoom().scaleExtent([0.5, 8]).on('zoom', (event) => setTransform(event.transform))
+    zoomRef.current = behavior
     const svg = select(svgRef.current)
     svg.call(behavior)
     return () => { svg.on('.zoom', null) }
   }, [])
 
+  function applyTransform(nextTransform) {
+    if (!svgRef.current || !zoomRef.current) {
+      setTransform(nextTransform)
+      return
+    }
+    select(svgRef.current).call(zoomRef.current.transform, nextTransform)
+  }
+
+  function zoomTo(scale) {
+    const nextScale = Math.max(0.5, Math.min(8, scale))
+    applyTransform(zoomIdentity.translate(transform.x, transform.y).scale(nextScale))
+  }
+
+  function panBy(dx, dy) {
+    applyTransform(transform.translate(dx / transform.k, dy / transform.k))
+  }
+
+  function resetView() {
+    applyTransform(zoomIdentity)
+  }
+
   const points = useMemo(() => {
     const map = new Map()
     ;(visData?.points || []).forEach((p) => {
-      map.set(p.chunk_id, { id: p.chunk_id, page: p.page_number, x: p.x, y: p.y, preview: p.preview || '', similarity: p.similarity_score || 0, isRetrieved: Boolean(p.is_retrieved) })
+      map.set(p.chunk_id, { id: p.chunk_id, page: p.page_number, x: finiteNumber(p.x), y: finiteNumber(p.y), preview: p.preview || '', similarity: finiteNumber(p.similarity_score), isRetrieved: Boolean(p.is_retrieved) })
     })
     ;(chunks || []).forEach((c) => {
       if (!map.has(c.chunk_id)) {
@@ -58,13 +86,15 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
     const xs = points.map((p) => p.x), ys = points.map((p) => p.y)
     const minX = xs.length ? Math.min(...xs) : -1, maxX = xs.length ? Math.max(...xs) : 1
     const minY = ys.length ? Math.min(...ys) : -1, maxY = ys.length ? Math.max(...ys) : 1
-    const nx = maxX === minX ? 0.5 : (qp.x - minX) / (maxX - minX)
-    const ny = maxY === minY ? 0.5 : (qp.y - minY) / (maxY - minY)
+    const qx = finiteNumber(qp.x)
+    const qy = finiteNumber(qp.y)
+    const nx = maxX === minX ? 0.5 : (qx - minX) / (maxX - minX)
+    const ny = maxY === minY ? 0.5 : (qy - minY) / (maxY - minY)
     return { x: 30 + nx * (width - 60), y: 30 + ny * (height - 60), query: qp.query || queryResult.query }
   }, [points, queryResult, visData])
 
   const results = queryResult?.results || []
-  const maxSimilarity = results.length ? Math.max(...results.map((r) => r.similarity_score || 0)) : 1
+  const maxSimilarity = results.length ? Math.max(...results.map((r) => finiteNumber(r.similarity_score))) : 1
   const hoverPoint = scaledPoints.find((p) => p.id === hoverId)
   const baseRadius = scaledPoints.length > 1800 ? 1.7 : scaledPoints.length > 900 ? 2.3 : 4
   const retrievedRadius = scaledPoints.length > 1800 ? 4.5 : scaledPoints.length > 900 ? 5 : 6
@@ -87,6 +117,25 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
           <span>{chunks?.length || 0} chunks</span>
           <span>{results.length} retrieved</span>
         </div>
+      </div>
+      <div className="constellation-controls" aria-label="Embedding view controls">
+        <button type="button" onClick={() => zoomTo(transform.k * 0.8)} title="Zoom out">-</button>
+        <input
+          type="range"
+          min="0.5"
+          max="8"
+          step="0.1"
+          value={Number(transform.k.toFixed(2))}
+          onChange={(event) => zoomTo(Number(event.target.value))}
+          aria-label="Zoom level"
+        />
+        <button type="button" onClick={() => zoomTo(transform.k * 1.25)} title="Zoom in">+</button>
+        <button type="button" onClick={() => panBy(70, 0)} title="Pan left">Left</button>
+        <button type="button" onClick={() => panBy(-70, 0)} title="Pan right">Right</button>
+        <button type="button" onClick={() => panBy(0, 70)} title="Pan up">Up</button>
+        <button type="button" onClick={() => panBy(0, -70)} title="Pan down">Down</button>
+        <button type="button" onClick={resetView} title="Reset view">Reset</button>
+        <span>{transform.k.toFixed(1)}x</span>
       </div>
       <div className="constellation">
         <div className="svg-wrap">
@@ -131,11 +180,12 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
           <h4>Cosine Similarity Bars</h4>
           <div className="results">
             {results.map((r) => {
-              const widthPct = maxSimilarity > 0 ? ((r.similarity_score || 0) / maxSimilarity) * 100 : 0
+              const similarity = finiteNumber(r.similarity_score)
+              const widthPct = maxSimilarity > 0 ? (similarity / maxSimilarity) * 100 : 0
               return (
                 <div key={r.chunk_id} className={`result-item ${hoverId === r.chunk_id ? 'hover' : ''}`}
                   onMouseEnter={() => setHoverId(r.chunk_id)} onMouseLeave={() => setHoverId(null)}>
-                  <div className="meta">#{r.rank} page {r.page_number} | {r.similarity_score.toFixed(3)}</div>
+                  <div className="meta">#{r.rank ?? '-'} page {r.page_number ?? '-'} | {similarity.toFixed(3)}</div>
                   <div className="bar-track"><div className="bar-fill" style={{ width: `${widthPct}%`, transition: 'width 420ms ease' }} /></div>
                   <div className="preview">{r.chunk_text_preview}</div>
                 </div>

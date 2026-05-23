@@ -29,6 +29,7 @@ export default function VectorlessMarkdownAnalytics({ queryResult, visData }) {
   const [hoverId, setHoverId] = useState(null)
   const [transform, setTransform] = useState(zoomIdentity)
   const svgRef = useRef(null)
+  const zoomRef = useRef(null)
   const treeData = visData?.tree
   const selectedPathIds = new Set(visData?.selected_path_ids || [])
   const selectedPath = visData?.selected_path || queryResult?.selected_path || []
@@ -63,9 +64,26 @@ export default function VectorlessMarkdownAnalytics({ queryResult, visData }) {
   useEffect(() => {
     if (!svgRef.current) return
     const behavior = zoom().scaleExtent([0.55, 7]).on('zoom', (event) => setTransform(event.transform))
+    zoomRef.current = behavior
     select(svgRef.current).call(behavior)
     return () => { select(svgRef.current).on('.zoom', null) }
   }, [])
+
+  function applyTransform(nextTransform) {
+    if (!svgRef.current || !zoomRef.current) {
+      setTransform(nextTransform)
+      return
+    }
+    select(svgRef.current).call(zoomRef.current.transform, nextTransform)
+  }
+
+  function zoomTo(scale) {
+    applyTransform(zoomIdentity.translate(transform.x, transform.y).scale(Math.max(0.55, Math.min(7, scale))))
+  }
+
+  function panBy(dx, dy) {
+    applyTransform(transform.translate(dx / transform.k, dy / transform.k))
+  }
 
   const hoverNode = layout.nodes.find((node) => node.data.id === hoverId)
 
@@ -104,6 +122,17 @@ export default function VectorlessMarkdownAnalytics({ queryResult, visData }) {
         </article>
 
         <article className="viz-card vectorless-tree-card">
+          <div className="constellation-controls vectorless-controls" aria-label="Document tree view controls">
+            <button type="button" onClick={() => zoomTo(transform.k * 0.8)}>-</button>
+            <input type="range" min="0.55" max="7" step="0.1" value={Number(transform.k.toFixed(2))} onChange={(event) => zoomTo(Number(event.target.value))} aria-label="Tree zoom level" />
+            <button type="button" onClick={() => zoomTo(transform.k * 1.25)}>+</button>
+            <button type="button" onClick={() => panBy(70, 0)}>Left</button>
+            <button type="button" onClick={() => panBy(-70, 0)}>Right</button>
+            <button type="button" onClick={() => panBy(0, 70)}>Up</button>
+            <button type="button" onClick={() => panBy(0, -70)}>Down</button>
+            <button type="button" onClick={() => applyTransform(zoomIdentity)}>Reset</button>
+            <span>{transform.k.toFixed(1)}x</span>
+          </div>
           <div className="vectorless-tree-wrap">
             <svg ref={svgRef} className="vectorless-tree-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
               <rect x="0" y="0" width={width} height={height} className="vectorless-bg" />
@@ -127,7 +156,7 @@ export default function VectorlessMarkdownAnalytics({ queryResult, visData }) {
                       transform={`translate(${node.sx},${node.sy})`}
                       onMouseEnter={() => setHoverId(node.data.id)}
                       onMouseLeave={() => setHoverId(null)}
-                      onClick={() => toggleNode(node.data.id)}>
+                      onClick={(event) => { event.stopPropagation(); toggleNode(node.data.id) }}>
                       <circle r={node.data.type === 'document' ? 12 : node.data.type === 'section' ? 9 : 6} fill={confidenceColor(confidence)} />
                       <text x={14} y={4}>{truncate(node.data.label)}</text>
                       {node.data._collapsedCount > 0 && <text x={14} y={18} className="collapsed-count">+{node.data._collapsedCount} hidden</text>}
@@ -137,15 +166,19 @@ export default function VectorlessMarkdownAnalytics({ queryResult, visData }) {
                 })}
               </g>
             </svg>
-            {hoverNode && (
-              <div className="vectorless-hover-card">
+          </div>
+          <div className="vectorless-selection-strip">
+            {hoverNode ? (
+              <>
                 <strong>{hoverNode.data.label}</strong>
                 <span>{hoverNode.data.type} | confidence {(hoverNode.data.confidence || 0).toFixed(2)}</span>
                 <p>{hoverNode.data.preview || 'Click to collapse or expand this branch.'}</p>
-              </div>
+              </>
+            ) : (
+              <span>Hover a node to inspect it. Click a branch node to collapse or expand.</span>
             )}
           </div>
-          <div className="zoom-hint">Wheel to zoom. Drag to pan. Click a node to collapse or expand its branch.</div>
+          <div className="zoom-hint">Wheel or controls to zoom. Drag canvas to pan.</div>
         </article>
 
         <article className="viz-card">

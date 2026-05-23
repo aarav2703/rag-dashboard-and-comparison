@@ -41,6 +41,7 @@ export default function GraphRagAnalytics({ queryResult, visData }) {
   const [visibleTypes, setVisibleTypes] = useState(() => new Set(['document', 'entity', 'claim', 'section']))
   const [transform, setTransform] = useState(zoomIdentity)
   const svgRef = useRef(null)
+  const zoomRef = useRef(null)
   const results = queryResult?.results || []
   const graph = neighborhood === 'answer' ? visData?.highlighted_subgraph : visData?.graph
   const nodes = graph?.nodes || []
@@ -68,11 +69,33 @@ export default function GraphRagAnalytics({ queryResult, visData }) {
   useEffect(() => {
     if (!svgRef.current) return
     const behavior = zoom().scaleExtent([0.55, 8]).on('zoom', (event) => setTransform(event.transform))
+    zoomRef.current = behavior
     select(svgRef.current).call(behavior)
     return () => { select(svgRef.current).on('.zoom', null) }
   }, [])
 
-  useEffect(() => { setHoverId(null); setSelectedId(null); setTransform(zoomIdentity) }, [neighborhood])
+  useEffect(() => {
+    setHoverId(null)
+    setSelectedId(null)
+    if (svgRef.current && zoomRef.current) select(svgRef.current).call(zoomRef.current.transform, zoomIdentity)
+    else setTransform(zoomIdentity)
+  }, [neighborhood])
+
+  function applyTransform(nextTransform) {
+    if (!svgRef.current || !zoomRef.current) {
+      setTransform(nextTransform)
+      return
+    }
+    select(svgRef.current).call(zoomRef.current.transform, nextTransform)
+  }
+
+  function zoomTo(scale) {
+    applyTransform(zoomIdentity.translate(transform.x, transform.y).scale(Math.max(0.55, Math.min(8, scale))))
+  }
+
+  function panBy(dx, dy) {
+    applyTransform(transform.translate(dx / transform.k, dy / transform.k))
+  }
 
   function toggleType(type) {
     setVisibleTypes((current) => {
@@ -108,6 +131,17 @@ export default function GraphRagAnalytics({ queryResult, visData }) {
         </article>
 
         <article className="viz-card graph-canvas-card">
+          <div className="constellation-controls graph-controls" aria-label="Graph view controls">
+            <button type="button" onClick={() => zoomTo(transform.k * 0.8)}>-</button>
+            <input type="range" min="0.55" max="8" step="0.1" value={Number(transform.k.toFixed(2))} onChange={(event) => zoomTo(Number(event.target.value))} aria-label="Graph zoom level" />
+            <button type="button" onClick={() => zoomTo(transform.k * 1.25)}>+</button>
+            <button type="button" onClick={() => panBy(70, 0)}>Left</button>
+            <button type="button" onClick={() => panBy(-70, 0)}>Right</button>
+            <button type="button" onClick={() => panBy(0, 70)}>Up</button>
+            <button type="button" onClick={() => panBy(0, -70)}>Down</button>
+            <button type="button" onClick={() => applyTransform(zoomIdentity)}>Reset</button>
+            <span>{transform.k.toFixed(1)}x</span>
+          </div>
           <div className="graph-canvas-wrap">
             <svg ref={svgRef} className="graph-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
               <rect x="0" y="0" width={width} height={height} className="graph-bg" />
@@ -145,15 +179,19 @@ export default function GraphRagAnalytics({ queryResult, visData }) {
                 })}
               </g>
             </svg>
-            {activeNode && (
-              <div className="graph-hover-card">
+          </div>
+          <div className="graph-selection-strip">
+            {activeNode ? (
+              <>
                 <strong>{activeNode.label}</strong>
                 <span>{activeNode.type}{activeNode.page_number ? ` | page ${activeNode.page_number}` : ''}</span>
                 <p>{activeNode.preview || `${connectedIds.size - 1} connected nodes`}</p>
-              </div>
+              </>
+            ) : (
+              <span>Hover a node to inspect it. Click keeps its connected neighborhood highlighted.</span>
             )}
           </div>
-          <div className="zoom-hint">Wheel to zoom. Drag to pan. Hover nodes to inspect; click to pin a neighborhood.</div>
+          <div className="zoom-hint">Wheel or controls to zoom. Drag canvas to pan.</div>
           <div className="graph-legend">
             {['document', 'entity', 'claim', 'section'].map((type) => (
               <button key={type} type="button" className={visibleTypes.has(type) ? 'active' : ''} onClick={() => toggleType(type)}>
@@ -164,12 +202,14 @@ export default function GraphRagAnalytics({ queryResult, visData }) {
         </article>
 
         <article className="viz-card">
-          <h4>Query Path Explanation</h4>
-          <div className="query-path-list">
+          <h4>Query Path Flow</h4>
+          <div className="query-path-flow">
             {pathRows.slice(0, 10).map((path, index) => (
-              <div key={`${path.entity}-${path.section}-${index}`} className="query-path-row">
-                <span>{'\u2192'}</span>
-                <div><strong>{path.entity || 'fallback'}</strong><span>{path.related_entity ? `via ${path.related_entity}` : path.edge_type}</span><strong>{path.section || 'section match'}</strong></div>
+              <div key={`${path.entity}-${path.section}-${index}`} className="query-path-flow-row">
+                <span>{index + 1}</span>
+                <strong>{path.entity || 'fallback'}</strong>
+                <i>{path.related_entity ? `via ${path.related_entity}` : path.edge_type}</i>
+                <strong>{path.section || 'section match'}</strong>
               </div>
             ))}
           </div>

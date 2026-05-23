@@ -9,8 +9,8 @@ import VectorlessMarkdownAnalytics from './components/VectorlessMarkdownAnalytic
 import AgenticRagAnalytics from './components/AgenticRagAnalytics.jsx'
 import MultiHopRagAnalytics from './components/MultiHopRagAnalytics.jsx'
 import MethodComparison from './components/MethodComparison.jsx'
-import EvaluationPanel from './components/EvaluationPanel.jsx'
 import ConsolePanel from './components/ConsolePanel.jsx'
+import AnswerCriticPanel from './components/AnswerCriticPanel.jsx'
 import { buildEmbeddings } from './lib/ragUtils.js'
 
 const API_BASE = 'http://localhost:5000'
@@ -152,6 +152,38 @@ function WorkspaceSummary({ chunks, queryResult, visData, activePipeline, source
   )
 }
 
+function MethodTimeline({ activePipeline, queryResult }) {
+  const retrieved = queryResult?.results?.length || 0
+  const accepted = queryResult?.critic?.verdict === 'accepted'
+  const steps = [
+    { label: 'Load Corpus', detail: activePipeline.shortLabel },
+    { label: 'Retrieve', detail: retrieved ? `${retrieved} chunks` : 'waiting' },
+    { label: 'Generate', detail: queryResult?.answer ? 'answer ready' : 'idle' },
+    { label: 'Critique', detail: queryResult?.critic?.verdict || 'pending' },
+    { label: 'Finalize', detail: accepted ? 'grounded' : queryResult?.answer ? 'review' : 'idle' }
+  ]
+
+  return (
+    <section className="panel method-timeline-panel">
+      <div>
+        <h3>Method Timeline Trace</h3>
+        <p>{activePipeline.label}</p>
+      </div>
+      <div className="timeline common-timeline">
+        {steps.map((step, index) => {
+          const isActive = Boolean(queryResult) && (index <= 1 || (index <= 3 && queryResult?.answer) || (index === 4 && queryResult?.critic))
+          return (
+            <div key={step.label} className={`timeline-step ${isActive ? 'active' : ''}`}>
+              <span className="timeline-dot" />
+              <div><div className="timeline-name">{step.label}</div><div className="timeline-meta">{step.detail}</div></div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export default function App() {
   const [pipelineMode, setPipelineMode] = useState('naive')
   const [chunks, setChunks] = useState([])
@@ -165,6 +197,7 @@ export default function App() {
   const [pipelineStatus, setPipelineStatus] = useState('red')
   const [methodStatuses, setMethodStatuses] = useState(INITIAL_METHOD_STATUS)
   const [corpusReady, setCorpusReady] = useState(false)
+  const [selectedFileNeedsBuild, setSelectedFileNeedsBuild] = useState(false)
   const [comparisonData, setComparisonData] = useState({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const eventSourceRef = useRef(null)
@@ -234,6 +267,57 @@ export default function App() {
     }
   }
 
+  async function buildSelectedPdfCorpus(mode = 'naive') {
+    if (!uploadedFile) throw new Error('Please select a file first')
+
+    setPipelineRunning(true)
+    setPipelineStatus('yellow')
+    setMethodStatuses(INITIAL_METHOD_STATUS)
+    setCorpusReady(false)
+    setChunks([])
+    setQueryResult(null)
+    setVisData(null)
+    setComparisonData({})
+    pushLog(`Building fresh corpus from ${uploadedFile.name}...`, 'info')
+
+    const formData = new FormData()
+    formData.append('file', uploadedFile)
+    const uploadRes = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData })
+    if (!uploadRes.ok) throw new Error('Upload failed: ' + (await uploadRes.text()))
+    const uploadData = await uploadRes.json()
+    pushLog(`File uploaded successfully: ${uploadData.filename}`, 'ok')
+
+    const runRes = await fetch(`${API_BASE}/api/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    })
+    if (!runRes.ok) throw new Error('Pipeline start failed: ' + (await runRes.text()))
+
+    let completed = false
+    let attempts = 0
+    while (!completed && attempts < 300) {
+      const statusRes = await fetch(`${API_BASE}/api/status`)
+      if (statusRes.ok) {
+        const status = await statusRes.json()
+        if (status.state === 'green') {
+          completed = true
+          break
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 500))
+      attempts += 1
+    }
+
+    if (!completed) throw new Error('Pipeline timeout')
+    pushLog('Fresh PDF corpus ready', 'ok')
+    setCorpusReady(true)
+    setSelectedFileNeedsBuild(false)
+    setPipelineStatus('green')
+    setSourceName(uploadedFile.name)
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
   useEffect(() => {
     const setupEventStream = () => {
       const es = new EventSource(`${API_BASE}/api/logs`)
@@ -278,6 +362,7 @@ export default function App() {
     if (!file) return
     if (!file.name.toLowerCase().endsWith('.pdf')) { pushLog('Only PDF files are supported', 'error'); return }
     setUploadedFile(file)
+    setSelectedFileNeedsBuild(true)
     setPipelineStatus('red')
     setMethodStatuses(INITIAL_METHOD_STATUS)
     setCorpusReady(false)
@@ -295,39 +380,30 @@ export default function App() {
       pushLog('Please select a file first', 'error')
       return
     }
-    if (activePipeline.comparisonOnly) { await loadComparisonArtifacts(); return }
+    if (activePipeline.comparisonOnly) {
+      try {
+        await buildSelectedPdfCorpus('naive')
+        const artifacts = await loadComparisonArtifacts()
+        RUNNABLE_METHODS.forEach((method) => {
+          if (hasUsableMethodArtifact(artifacts[method.id])) {
+            setMethodStatuses((prev) => ({ ...prev, [method.id]: 'green' }))
+          }
+        })
+      } catch (e) {
+        pushLog(`Pipeline error: ${String(e.message || e)}`, 'error')
+      } finally {
+        setPipelineRunning(false)
+      }
+      return
+    }
 
     setPipelineRunning(true)
     setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'yellow' }))
-    pushLog('Starting pipeline execution...', 'info')
 
     try {
-      const formData = new FormData()
-      formData.append('file', uploadedFile)
-      const uploadRes = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData })
-      if (!uploadRes.ok) throw new Error('Upload failed: ' + (await uploadRes.text()))
-      const uploadData = await uploadRes.json()
-      pushLog(`File uploaded successfully: ${uploadData.filename}`, 'ok')
-
-      const runRes = await fetch(`${API_BASE}/api/run`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: pipelineMode })
-      })
-      if (!runRes.ok) throw new Error('Pipeline start failed: ' + (await runRes.text()))
-
-      let completed = false; let attempts = 0
-      while (!completed && attempts < 300) {
-        const statusRes = await fetch(`${API_BASE}/api/status`)
-        if (statusRes.ok) { const status = await statusRes.json(); if (status.state === 'green') { completed = true; break } }
-        await new Promise(resolve => setTimeout(resolve, 500)); attempts++
-      }
-
-      if (completed) {
+      await buildSelectedPdfCorpus(pipelineMode)
         pushLog('Pipeline completed successfully!', 'ok')
-        setCorpusReady(true)
         setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'green' }))
-        await new Promise(resolve => setTimeout(resolve, 500))
         try {
           const [chunksRes, queryRes, visRes] = await Promise.all([fetch(getArtifactUrl('chunks.json')), fetch(getArtifactUrl('query_result.json')), fetch(getArtifactUrl('vis.json'))])
           const [chunksJson, queryJson, visJson] = await Promise.all([chunksRes.json(), queryRes.json(), visRes.json()])
@@ -335,7 +411,6 @@ export default function App() {
           setChunks(loadedChunks); setQueryResult(queryJson || { query: '', results: [] }); setVisData(visJson || { points: [], query_point: null })
           setSourceName(uploadedFile.name)
         } catch (e) { pushLog(`Failed to load pipeline output: ${String(e)}`, 'error') }
-      } else { pushLog('Pipeline timeout', 'error'); setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'red' })) }
     } catch (e) { pushLog(`Pipeline error: ${String(e)}`, 'error'); setMethodStatuses((prev) => ({ ...prev, [pipelineMode]: 'red' })) }
     finally { setPipelineRunning(false) }
   }
@@ -344,6 +419,17 @@ export default function App() {
     if (!question.trim()) { pushLog('Type a question first.', 'error'); return }
 
     if (activePipeline.comparisonOnly) {
+      if (uploadedFile && selectedFileNeedsBuild) {
+        try {
+          await buildSelectedPdfCorpus('naive')
+        } catch (error) {
+          setPipelineRunning(false)
+          pushLog(`Pipeline error: ${String(error.message || error)}`, 'error')
+          return
+        } finally {
+          setPipelineRunning(false)
+        }
+      }
       if (!corpusReady && pipelineStatus !== 'green') { pushLog('Build the PDF corpus first.', 'error'); return }
       pushLog(`Comparison question: "${question}"`, 'info')
       for (const method of RUNNABLE_METHODS) {
@@ -430,10 +516,11 @@ export default function App() {
           <button className="run-button" onClick={handleRunPipeline}
             disabled={(!uploadedFile && !activePipeline.comparisonOnly) || pipelineRunning}
             style={{ opacity: (!uploadedFile && !activePipeline.comparisonOnly) || pipelineRunning ? 0.5 : 1, fontSize: 11 }}>
-            {pipelineRunning ? 'Running...' : activePipeline.comparisonOnly ? 'Load All' : `Run ${activePipeline.shortLabel}`}
+            {pipelineRunning ? 'Running...' : activePipeline.comparisonOnly ? 'Build Fresh Corpus' : `Run ${activePipeline.shortLabel}`}
           </button>
           <PipelineBadge status={activeStatus} />
           {uploadedFile && <div style={{ fontSize: 10, color: 'var(--muted)', wordBreak: 'break-all' }}>{uploadedFile.name}</div>}
+          {selectedFileNeedsBuild && <div style={{ fontSize: 10, color: 'var(--accent)' }}>Selected PDF has not been indexed yet.</div>}
         </div>
 
         <div className="sidebar-section-label">Query</div>
@@ -475,20 +562,20 @@ export default function App() {
           <WorkspaceSummary chunks={chunks} queryResult={queryResult} visData={visData} activePipeline={activePipeline} sourceName={sourceName} />
         )}
 
+        {!activePipeline.comparisonOnly && (
+          <MethodTimeline activePipeline={activePipeline} queryResult={queryResult} />
+        )}
+
         <section className="workspace-topbar">
           <ConsolePanel logs={logs} />
         </section>
-
-        {question && queryResult && (
-          <EvaluationPanel queryText={question} />
-        )}
 
         {pipelineMode === 'compare' ? (
           <main className="compare-workspace">
             <MethodComparison methods={RUNNABLE_METHODS} comparisonData={comparisonData} evalData={null} />
           </main>
         ) : (
-          <div className="main project-layout">
+          <div className={`main project-layout ${pipelineMode}-page`}>
             <section className="main-visual">
               <div className="method-title-row">
                 <h3>{activePipeline.label}</h3>
@@ -524,7 +611,14 @@ export default function App() {
                   )}
                 </div>
               ) : (
-                <EmbeddingConstellation chunks={chunks} queryResult={queryResult} visData={visData} />
+                <>
+                  <EmbeddingConstellation chunks={chunks} queryResult={queryResult} visData={visData} />
+                  {pipelineMode === 'naive' && (
+                    <div className="below-visual-answer">
+                      <AnswerCriticPanel queryResult={queryResult} title="Naive Vector Answer" />
+                    </div>
+                  )}
+                </>
               )}
             </section>
 

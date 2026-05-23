@@ -93,14 +93,6 @@ export default function AgenticRagAnalytics({ queryResult, visData }) {
                 <text y="13" className="agent-flow-status">{node.status}</text>
               </g>
             )})}
-            {layout.nodes.map((node, idx) => (
-              <g key={node.id} className={nodeClass(node)} transform={`translate(${node.x},${node.y})`}
-                onMouseEnter={() => setSelectedStep(node.id)} onMouseLeave={() => setSelectedStep(null)}>
-                <circle r="34" />
-                <text y="-2">{node.label}</text>
-                <text y="13" className="agent-flow-status">{node.status}</text>
-              </g>
-            ))}
           </svg>
         </article>
 

@@ -100,6 +100,15 @@ h1, h2, h3, h4, h5 {
 	align-items: start;
 }
 
+.project-layout.bm25-page {
+	grid-template-columns: 1fr;
+}
+
+.project-layout.bm25-page .main-visual,
+.project-layout.bm25-page .main-analytics {
+	width: 100%;
+}
+
 .panel {
 	background: var(--card);
 	border: 1px solid var(--line);
@@ -655,6 +664,46 @@ h1, h2, h3, h4, h5 {
 	color: var(--muted);
 }
 
+.constellation-controls {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 10px 0 12px;
+	padding: 8px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--card-alt);
+}
+
+.constellation-controls button {
+	min-width: 42px;
+	height: 30px;
+	padding: 0 10px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	color: var(--ink);
+	font-weight: 800;
+	cursor: pointer;
+}
+
+.constellation-controls button:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.constellation-controls input {
+	width: min(240px, 40vw);
+	accent-color: var(--accent);
+}
+
+.constellation-controls span {
+	font-size: 12px;
+	font-weight: 800;
+	color: var(--muted);
+}
+
 .constellation {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
@@ -885,8 +934,9 @@ h1, h2, h3, h4, h5 {
 
 .coverage-cell.cited {
 	border-color: var(--accent);
-	background: rgba(245, 158, 11, 0.2);
-	box-shadow: 0 0 8px var(--accent-glow);
+	background: rgba(245, 158, 11, 0.34);
+	box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.45), 0 0 12px var(--accent-glow);
+	color: var(--ink);
 }
 
 .failure-list {
@@ -940,6 +990,50 @@ h1, h2, h3, h4, h5 {
 .timeline-meta {
 	font-size: 11px;
 	color: var(--muted);
+}
+
+.method-timeline-panel {
+	display: grid;
+	grid-template-columns: minmax(180px, 260px) 1fr;
+	gap: 16px;
+	align-items: center;
+	margin-bottom: 16px;
+}
+
+.method-timeline-panel h3 {
+	margin: 0;
+	font-size: 15px;
+}
+
+.method-timeline-panel p {
+	margin: 4px 0 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.common-timeline {
+	grid-template-columns: repeat(5, minmax(110px, 1fr));
+	gap: 10px;
+}
+
+.common-timeline .timeline-step {
+	padding: 9px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card-alt);
+}
+
+.common-timeline .timeline-step.active {
+	border-color: rgba(34, 197, 94, 0.45);
+	background: rgba(34, 197, 94, 0.08);
+}
+
+.common-timeline .timeline-step:not(.active) .timeline-dot {
+	background: #64748b;
+}
+
+.below-visual-answer {
+	margin-top: 14px;
 }
 
 .sankey-wrap {
@@ -1016,8 +1110,12 @@ h1, h2, h3, h4, h5 {
 
 .bm25-layout {
 	display: grid;
-	grid-template-columns: 1.15fr 1fr;
+	grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
 	gap: 12px;
+}
+
+.bm25-page .bm25-layout {
+	grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
 }
 
 .bm25-column {
@@ -2544,6 +2642,86 @@ button.overlap-cell {
 	background: rgba(15, 23, 42, 0.92);
 	color: #f8fafc;
 	pointer-events: none;
+}
+
+.graph-selection-strip,
+.vectorless-selection-strip {
+	display: grid;
+	gap: 4px;
+	margin-top: 10px;
+	padding: 10px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card-alt);
+	color: var(--ink);
+}
+
+.graph-selection-strip span,
+.vectorless-selection-strip span {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.graph-selection-strip p,
+.vectorless-selection-strip p {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.35;
+}
+
+.query-path-flow {
+	display: grid;
+	gap: 8px;
+	max-height: 520px;
+	overflow: auto;
+}
+
+.query-path-flow-row {
+	display: grid;
+	grid-template-columns: 28px 1fr;
+	gap: 6px 10px;
+	align-items: center;
+	padding: 10px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card-alt);
+	position: relative;
+}
+
+.query-path-flow-row::after {
+	content: "";
+	position: absolute;
+	left: 22px;
+	bottom: -9px;
+	width: 2px;
+	height: 8px;
+	background: var(--accent);
+	opacity: 0.45;
+}
+
+.query-path-flow-row:last-child::after {
+	display: none;
+}
+
+.query-path-flow-row > span {
+	grid-row: span 3;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 999px;
+	background: rgba(245, 158, 11, 0.14);
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 900;
+}
+
+.query-path-flow-row i {
+	font-style: normal;
+	color: var(--muted);
+	font-size: 11px;
 }
 
 .graph-hover-card span {
