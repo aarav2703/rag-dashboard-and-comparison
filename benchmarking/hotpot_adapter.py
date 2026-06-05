@@ -205,19 +205,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--split", default=DEFAULT_SPLIT)
     parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument("--full", action="store_true", help="Use the full split. Overrides --limit.")
     parser.add_argument("--output-dir", type=Path, default=ARTIFACTS_DIR)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    examples = load_hotpot_dataset(args.config, args.split, args.limit)
+    limit = None if args.full else args.limit
+    examples = load_hotpot_dataset(args.config, args.split, limit)
     payload = convert_examples(examples)
     payload["metadata"].update(
         {
             "config": args.config,
             "split": args.split,
-            "limit": args.limit,
+            "limit": limit,
+            "full": args.full,
         }
     )
     write_artifacts(payload, args.output_dir)

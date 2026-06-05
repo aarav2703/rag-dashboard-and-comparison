@@ -6,6 +6,7 @@ import threading
 import urllib.error
 import urllib.request
 import re
+import hashlib
 from pathlib import Path
 from queue import Queue
 from flask import Flask, request, jsonify, Response
@@ -30,6 +31,7 @@ from shared_rag_store import (
     unique_preserve_order,
     write_json,
 )
+from graph_cache import load_graph_artifacts
 
 app = Flask(__name__)
 CORS(app)
@@ -66,33 +68,21 @@ PIPELINE_CONFIG = {
         "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
         "prefix": "naive_rag",
     },
-    "bm25": {
-        "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
-        "prefix": "bm25_lexical",
-    },
     "hybrid": {
         "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
         "prefix": "hybrid_rag",
-    },
-    "rerank": {
-        "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
-        "prefix": "rerank_rag",
     },
     "graph": {
         "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
         "prefix": "graph_rag",
     },
-    "vectorless": {
-        "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
-        "prefix": "vectorless_markdown",
-    },
     "agentic": {
         "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
         "prefix": "agentic_rag",
     },
-    "multihop": {
+    "crag": {
         "script": os.path.join(os.path.dirname(__file__), "notebooks", "00_build_faiss_corpus.py"),
-        "prefix": "multihop_rag",
+        "prefix": "crag_rag",
     },
 }
 
@@ -101,6 +91,7 @@ INSUFFICIENT_EVIDENCE_ANSWER = (
     "I don't have enough information in the retrieved evidence to answer that reliably."
 )
 TRUE_VALUES = {"1", "true", "yes", "on"}
+FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 def log_event(level, message, tag="system"):
@@ -196,6 +187,8 @@ def deepseek_generate_answer(query_text, retrieved_results):
 
 
 def deepseek_chat(messages, max_tokens=260, temperature=0.0, timeout=35):
+    if os.environ.get("RAG_ALLOW_EXTERNAL_TOOLS", "true").strip().lower() in FALSE_VALUES:
+        raise RuntimeError("External tools are disabled")
     api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
@@ -221,6 +214,105 @@ def deepseek_chat(messages, max_tokens=260, temperature=0.0, timeout=35):
     if not choices:
         raise RuntimeError("DeepSeek returned no critic choices")
     return choices[0].get("message", {}).get("content", "").strip()
+
+
+def external_tools_enabled():
+    return os.environ.get("RAG_ALLOW_EXTERNAL_TOOLS", "true").strip().lower() not in FALSE_VALUES
+
+
+def run_tavily_search_tool(query, max_results=5):
+    """Run Tavily search and normalize web results into evidence-like rows."""
+    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if not external_tools_enabled():
+        return {
+            "enabled": False,
+            "provider": "tavily",
+            "error": "External tools are disabled",
+            "results": [],
+        }
+    if not api_key:
+        return {
+            "enabled": False,
+            "provider": "tavily",
+            "error": "TAVILY_API_KEY is not configured",
+            "results": [],
+        }
+
+    payload = {
+        "query": query,
+        "max_results": max(1, min(int(max_results or 5), 8)),
+        "search_depth": "advanced",
+        "include_answer": False,
+        "include_raw_content": "markdown",
+    }
+    request = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=35) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "provider": "tavily",
+            "error": str(exc),
+            "results": [],
+        }
+
+    rows = []
+    for rank, item in enumerate(response_data.get("results", [])[: payload["max_results"]], start=1):
+        title = str(item.get("title") or item.get("url") or f"Web result {rank}").strip()
+        snippet = str(item.get("content") or item.get("snippet") or "").strip()
+        raw_content = str(item.get("raw_content") or "").strip()
+        text = raw_content or snippet
+        rows.append(
+            {
+                "rank": rank,
+                "chunk_id": f"web::{rank}::{hashlib.sha1(str(item.get('url') or title).encode('utf-8')).hexdigest()[:12]}",
+                "page_number": "web",
+                "source": "web_search",
+                "provider": "tavily",
+                "url": item.get("url", ""),
+                "title": title,
+                "snippet": snippet,
+                "chunk_text_preview": (snippet or text)[:260],
+                "full_chunk_text": text[:2200],
+                "web_score": float(item.get("score") or 0.0),
+            }
+        )
+    return {
+        "enabled": True,
+        "provider": "tavily",
+        "query": query,
+        "results": rows,
+        "raw_result_count": len(response_data.get("results", [])),
+    }
+
+
+def parse_json_payload(content, fallback):
+    text = (content or "").strip()
+    if not text:
+        return fallback
+    match = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        text = match.group(1).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except Exception:
+                return fallback
+    return fallback
 
 
 def deepseek_critic_enabled():
@@ -922,6 +1014,296 @@ def run_rerank_retrieval(query_text, top_k=5, candidate_k=20):
     return result, vis, rows
 
 
+def grade_retrieved_evidence(query_text, rows):
+    query_terms = unique_preserve_order(tokenize(query_text))
+    graded = []
+    for row in rows:
+        matched_terms = row.get("matched_terms", [])
+        coverage = len(matched_terms) / max(1, len(query_terms))
+        score = float(row.get("reranker_score") or row.get("hybrid_score") or row.get("similarity_score") or 0.0)
+        if coverage >= 0.45 or score >= 0.72:
+            verdict = "correct"
+            action = "answer"
+            reason = "high ranked evidence with enough lexical or semantic support"
+        elif coverage >= 0.18 or score >= 0.38:
+            verdict = "ambiguous"
+            action = "rewrite"
+            reason = "partial support; query rewrite may improve evidence"
+        else:
+            verdict = "incorrect"
+            action = "fallback"
+            reason = "weak support for the query"
+        graded.append(
+            {
+                "chunk_id": row.get("chunk_id"),
+                "page_number": row.get("page_number"),
+                "grade": verdict,
+                "action": action,
+                "reason": reason,
+                "term_coverage": round(coverage, 6),
+                "score": round(score, 6),
+                "preview": row.get("chunk_text_preview") or row.get("preview", ""),
+            }
+        )
+    return graded
+
+
+def llm_grade_retrieved_evidence(query_text, rows):
+    if not rows:
+        return []
+    evidence = [
+        {
+            "chunk_id": row.get("chunk_id"),
+            "page_number": row.get("page_number"),
+            "score": row.get("reranker_score") or row.get("hybrid_score") or row.get("similarity_score"),
+            "text": (row.get("full_chunk_text") or row.get("chunk_text_preview") or "")[:900],
+        }
+        for row in rows[:8]
+    ]
+    prompt = (
+        "Grade retrieved evidence for this question before answer generation. "
+        "Return JSON only with key grades, an array. Each item must include chunk_id, grade "
+        "(correct, ambiguous, or incorrect), grade_reason, confidence, suggested_query, fallback_action.\n\n"
+        f"Question: {query_text}\n\n"
+        f"Evidence: {json.dumps(evidence, ensure_ascii=False)}"
+    )
+    try:
+        content = deepseek_chat(
+            [
+                {"role": "system", "content": "You are a strict CRAG retrieval evaluator. Return only JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=900,
+            temperature=0.0,
+            timeout=45,
+        )
+        payload = parse_json_payload(content, {"grades": []})
+        grades = payload.get("grades", [])
+    except Exception:
+        return []
+    by_id = {row.get("chunk_id"): row for row in rows}
+    cleaned = []
+    for item in grades:
+        if not isinstance(item, dict) or item.get("chunk_id") not in by_id:
+            continue
+        grade = str(item.get("grade", "ambiguous")).lower()
+        if grade not in {"correct", "ambiguous", "incorrect"}:
+            grade = "ambiguous"
+        try:
+            confidence = max(0.0, min(1.0, float(item.get("confidence", 0.6))))
+        except Exception:
+            confidence = 0.6
+        source = by_id[item["chunk_id"]]
+        cleaned.append(
+            {
+                "chunk_id": item["chunk_id"],
+                "page_number": source.get("page_number"),
+                "grade": grade,
+                "action": "answer" if grade == "correct" else "rewrite" if grade == "ambiguous" else "fallback",
+                "reason": item.get("grade_reason") or item.get("reason") or "LLM retrieval grade",
+                "grade_reason": item.get("grade_reason") or item.get("reason") or "LLM retrieval grade",
+                "confidence": round(confidence, 3),
+                "suggested_query": item.get("suggested_query") or query_text,
+                "fallback_action": item.get("fallback_action") or ("answer" if grade == "correct" else "rewrite" if grade == "ambiguous" else "web_search_fallback"),
+                "score": source.get("reranker_score", 0.0),
+                "preview": source.get("chunk_text_preview", ""),
+                "grader_source": "deepseek",
+            }
+        )
+    return cleaned
+
+
+def llm_grade_retrieval_set(query_text, rows):
+    if not rows:
+        return {}
+    evidence = [
+        {
+            "chunk_id": row.get("chunk_id"),
+            "page_number": row.get("page_number"),
+            "score": row.get("reranker_score") or row.get("hybrid_score") or row.get("similarity_score"),
+            "text": (row.get("full_chunk_text") or row.get("chunk_text_preview") or "")[:900],
+        }
+        for row in rows[:8]
+    ]
+    prompt = (
+        "Grade the whole retrieved evidence set for CRAG. "
+        "Return JSON only with retrieval_verdict (correct, ambiguous, incorrect), "
+        "missing_evidence_summary, recommended_action (answer, rewrite, web_fallback), "
+        "confidence, and suggested_query.\n\n"
+        f"Question: {query_text}\n\n"
+        f"Evidence: {json.dumps(evidence, ensure_ascii=False)}"
+    )
+    try:
+        content = deepseek_chat(
+            [
+                {"role": "system", "content": "You are a strict CRAG retrieval-set evaluator. Return only JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=500,
+            temperature=0.0,
+            timeout=35,
+        )
+        payload = parse_json_payload(content, {})
+    except Exception:
+        return {}
+    verdict = str(payload.get("retrieval_verdict", "ambiguous")).lower()
+    if verdict not in {"correct", "ambiguous", "incorrect"}:
+        verdict = "ambiguous"
+    action = str(payload.get("recommended_action", "")).lower()
+    if action not in {"answer", "rewrite", "web_fallback"}:
+        action = "answer" if verdict == "correct" else "rewrite" if verdict == "ambiguous" else "web_fallback"
+    try:
+        confidence = max(0.0, min(1.0, float(payload.get("confidence", 0.6))))
+    except Exception:
+        confidence = 0.6
+    return {
+        "retrieval_verdict": verdict,
+        "missing_evidence_summary": payload.get("missing_evidence_summary", ""),
+        "recommended_action": action,
+        "confidence": round(confidence, 3),
+        "suggested_query": payload.get("suggested_query") or query_text,
+        "retrieval_grade_source": "deepseek",
+    }
+
+
+def run_crag_retrieval(query_text, top_k=5):
+    rerank_result, rerank_vis, rerank_rows = run_rerank_retrieval(query_text, top_k=top_k, candidate_k=20)
+    graded = llm_grade_retrieved_evidence(query_text, rerank_result.get("results", [])) or grade_retrieved_evidence(query_text, rerank_result.get("results", []))
+    set_grade = llm_grade_retrieval_set(query_text, rerank_result.get("results", []))
+    grade_counts = {}
+    for row in graded:
+        grade_counts[row["grade"]] = grade_counts.get(row["grade"], 0) + 1
+
+    if set_grade:
+        branch = set_grade["retrieval_verdict"]
+    elif grade_counts.get("correct", 0) >= max(1, top_k // 2):
+        branch = "correct"
+    elif grade_counts.get("ambiguous", 0):
+        branch = "ambiguous"
+    else:
+        branch = "incorrect"
+
+    fallback_source = "none"
+    web_results = []
+    correction_attempts = []
+    if branch == "correct":
+        branch_action = "answer"
+        correction_query = query_text
+        fallback_results = []
+    elif branch == "ambiguous":
+        branch_action = "rewrite"
+        correction_query = (
+            set_grade.get("suggested_query")
+            if set_grade and set_grade.get("suggested_query") != query_text
+            else None
+        ) or next((row.get("suggested_query") for row in graded if row.get("suggested_query") and row.get("suggested_query") != query_text), None) or f"{query_text} supporting evidence details".strip()
+        correction_attempts.append({"action": "rewrite", "query": correction_query, "source": "local"})
+        fallback_result, _, fallback_rows = run_hybrid_retrieval(correction_query, top_k=top_k, candidate_k=12)
+        fallback_results = fallback_result.get("results", [])
+        fallback_source = "local"
+        existing_ids = {row["chunk_id"] for row in rerank_result.get("results", [])}
+        for fallback_row in fallback_rows:
+            if len(rerank_result["results"]) >= top_k:
+                break
+            if fallback_row["chunk_id"] in existing_ids:
+                continue
+            chunk_preview = fallback_row.get("preview") or fallback_row.get("chunk_text_preview", "")
+            rerank_result["results"].append(
+                {
+                    "rank": len(rerank_result["results"]) + 1,
+                    "chunk_id": fallback_row["chunk_id"],
+                    "page_number": fallback_row["page_number"],
+                    "reranker_score": fallback_row.get("fusion_score", 0.0),
+                    "movement": 0,
+                    "movement_label": "fallback",
+                    "matched_terms": fallback_row.get("matched_terms", []),
+                    "chunk_text_preview": chunk_preview,
+                    "full_chunk_text": fallback_row.get("full_chunk_text", ""),
+                }
+            )
+            existing_ids.add(fallback_row["chunk_id"])
+    else:
+        branch_action = "fallback"
+        correction_query = (
+            set_grade.get("suggested_query")
+            if set_grade and set_grade.get("suggested_query") != query_text
+            else f"{query_text} overview context".strip()
+        )
+        web_payload = run_tavily_search_tool(correction_query, max_results=top_k)
+        web_results = web_payload.get("results", [])
+        if web_results:
+            fallback_source = "web"
+            fallback_results = web_results
+            rerank_result["results"] = web_results[:top_k]
+            correction_attempts.append({"action": "web_fallback", "query": correction_query, "source": "tavily", "result_count": len(web_results)})
+        else:
+            fallback_source = "local"
+            fallback_result, _, _ = run_hybrid_retrieval(correction_query, top_k=top_k, candidate_k=12)
+            fallback_results = fallback_result.get("results", [])
+            rerank_result["results"] = fallback_results[:top_k]
+            correction_attempts.append({"action": "local_fallback", "query": correction_query, "source": "hybrid", "result_count": len(fallback_results), "warning": web_payload.get("error")})
+
+    result = {
+        **rerank_result,
+        "mode": "crag",
+        "pipeline": "corrective_rag_with_rerank",
+        "crag_summary": {
+            "branch": branch,
+            "action": branch_action,
+            "grade_counts": grade_counts,
+            "correction_query": correction_query,
+            "fallback_count": len(fallback_results),
+            "fallback_source": fallback_source,
+            "grader_source": graded[0].get("grader_source", "heuristic") if graded else "none",
+            "average_grade_confidence": round(sum(row.get("confidence", 0.0) for row in graded) / max(1, len(graded)), 3),
+            "retrieval_verdict": set_grade.get("retrieval_verdict", branch) if set_grade else branch,
+            "retrieval_grade_source": set_grade.get("retrieval_grade_source", "heuristic") if set_grade else "heuristic",
+            "missing_evidence_summary": set_grade.get("missing_evidence_summary", "") if set_grade else "",
+            "recommended_action": set_grade.get("recommended_action", branch_action) if set_grade else branch_action,
+        },
+        "retrieval_verdict": set_grade.get("retrieval_verdict", branch) if set_grade else branch,
+        "missing_evidence_summary": set_grade.get("missing_evidence_summary", "") if set_grade else "",
+        "recommended_action": set_grade.get("recommended_action", branch_action) if set_grade else branch_action,
+        "retrieval_grade_source": set_grade.get("retrieval_grade_source", "heuristic") if set_grade else "heuristic",
+        "evidence_grades": graded,
+        "correction_query": correction_query,
+        "fallback_source": fallback_source,
+        "fallback_results": fallback_results,
+        "web_results": web_results,
+        "correction_attempts": correction_attempts,
+    }
+    vis = {
+        **rerank_vis,
+        "mode": "crag",
+        "pipeline": "corrective_rag_with_rerank",
+        "evidence_grades": graded,
+        "web_results": web_results,
+        "correction_attempts": correction_attempts,
+        "crag_flow": {
+            "branch": branch,
+            "action": branch_action,
+            "correction_query": correction_query,
+            "fallback_source": fallback_source,
+            "nodes": [
+                {"id": "query", "label": "Query", "type": "query"},
+                {"id": "retrieve", "label": "Retrieve", "type": "tool"},
+                {"id": "rerank", "label": "Rerank", "type": "tool"},
+                {"id": "grade", "label": "Grade", "type": "decision"},
+                {"id": branch_action, "label": branch_action.title(), "type": "action"},
+                {"id": "answer", "label": "Answer", "type": "answer"},
+            ],
+            "links": [
+                {"source": "query", "target": "retrieve"},
+                {"source": "retrieve", "target": "rerank"},
+                {"source": "rerank", "target": "grade"},
+                {"source": "grade", "target": branch_action},
+                {"source": branch_action, "target": "answer"},
+            ],
+        },
+    }
+    return result, vis, rerank_rows
+
+
 STOP_ENTITIES = {
     "The",
     "This",
@@ -992,6 +1374,184 @@ def graph_node_id(kind, value):
     return f"{kind}:{safe}"
 
 
+def normalize_entity_label(value):
+    value = re.sub(r"^\[|\]$", "", str(value or "")).strip().lower()
+    value = re.sub(r"[^a-z0-9\s]+", " ", value)
+    return " ".join(value.split())
+
+
+def extract_chunk_title(text):
+    match = re.match(r"\s*\[([^\]]{2,120})\]", str(text or ""))
+    return match.group(1).strip() if match else ""
+
+
+def add_graph_score(score_breakdown, section_id, key, value, detail=None):
+    if not section_id:
+        return
+    row = score_breakdown.setdefault(section_id, {})
+    row[key] = round(row.get(key, 0.0) + float(value), 6)
+    if detail:
+        row.setdefault("details", []).append(detail)
+
+
+def llm_extract_relationships(chunks, max_chunks=18):
+    selected = chunks[:max_chunks]
+    if not selected:
+        return []
+    blocks = []
+    for chunk in selected:
+        blocks.append(
+            f"chunk_id: {chunk['chunk_id']}\n"
+            f"page: {chunk.get('page_number')}\n"
+            f"text: {chunk.get('chunk_text', '')[:900]}"
+        )
+    prompt = (
+        "Extract a compact knowledge graph from these document chunks. "
+        "Return JSON only with key relationships, an array of objects. "
+        "Each object must have source_entity, relationship, target_entity, evidence_chunk_id, confidence.\n\n"
+        + "\n\n---\n\n".join(blocks)
+    )
+    try:
+        content = deepseek_chat(
+            [
+                {"role": "system", "content": "You extract precise document relationship triples. Return only JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=900,
+            temperature=0.0,
+            timeout=45,
+        )
+        payload = parse_json_payload(content, {"relationships": []})
+        relationships = payload.get("relationships", payload if isinstance(payload, list) else [])
+    except Exception:
+        return []
+
+    chunk_ids = {chunk["chunk_id"] for chunk in chunks}
+    cleaned = []
+    for row in relationships:
+        if not isinstance(row, dict):
+            continue
+        source = canonical_entity(str(row.get("source_entity", "")))
+        target = canonical_entity(str(row.get("target_entity", "")))
+        relation = canonical_entity(str(row.get("relationship", ""))).lower().replace(" ", "_")
+        evidence_id = str(row.get("evidence_chunk_id", ""))
+        if not source or not target or not relation or evidence_id not in chunk_ids:
+            continue
+        try:
+            confidence = max(0.0, min(1.0, float(row.get("confidence", 0.7))))
+        except Exception:
+            confidence = 0.7
+        cleaned.append(
+            {
+                "source_entity": source,
+                "relationship": relation,
+                "target_entity": target,
+                "evidence_chunk_id": evidence_id,
+                "confidence": round(confidence, 3),
+            }
+        )
+    return cleaned[:80]
+
+
+def fallback_relationships(chunks, max_rows=60):
+    rows = []
+    for chunk in chunks:
+        entities = extract_entities(chunk.get("chunk_text", ""), max_entities=8)
+        for left_index, left in enumerate(entities[:5]):
+            for right in entities[left_index + 1 : 5]:
+                rows.append(
+                    {
+                        "source_entity": left,
+                        "relationship": "co_occurs_with",
+                        "target_entity": right,
+                        "evidence_chunk_id": chunk["chunk_id"],
+                        "confidence": 0.45,
+                    }
+                )
+                if len(rows) >= max_rows:
+                    return rows
+    return rows
+
+
+def build_relationship_communities(graph, max_communities=8):
+    entity_edges = [
+        edge for edge in graph.get("edges", [])
+        if str(edge.get("source", "")).startswith("entity:") and str(edge.get("target", "")).startswith("entity:")
+    ]
+    adjacency = {}
+    for edge in entity_edges:
+        adjacency.setdefault(edge["source"], set()).add(edge["target"])
+        adjacency.setdefault(edge["target"], set()).add(edge["source"])
+    seen = set()
+    communities = []
+    nodes_by_id = {node["id"]: node for node in graph.get("nodes", [])}
+    for node_id in adjacency:
+        if node_id in seen:
+            continue
+        stack = [node_id]
+        component = []
+        seen.add(node_id)
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for neighbor in adjacency.get(current, set()):
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    stack.append(neighbor)
+        labels = [nodes_by_id.get(item, {}).get("label", item) for item in component]
+        communities.append(
+            {
+                "id": f"community:{len(communities) + 1}",
+                "label": ", ".join(labels[:3]) or f"Community {len(communities) + 1}",
+                "node_ids": component,
+                "entity_labels": labels,
+            }
+        )
+    return sorted(communities, key=lambda item: -len(item["node_ids"]))[:max_communities]
+
+
+def summarize_graph_communities(communities, relationships, max_items=6):
+    if not communities:
+        return []
+    rel_text = "\n".join(
+        f"- {row['source_entity']} {row['relationship']} {row['target_entity']}"
+        for row in relationships[:40]
+    )
+    prompt = (
+        "Summarize these graph communities using the relationship triples. "
+        "Return JSON only with key community_summaries, an array of objects with community_id, title, summary.\n\n"
+        f"Communities: {json.dumps(communities[:max_items], ensure_ascii=False)}\n\n"
+        f"Relationships:\n{rel_text}"
+    )
+    try:
+        content = deepseek_chat(
+            [
+                {"role": "system", "content": "You summarize knowledge graph communities concisely. Return only JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=700,
+            temperature=0.0,
+            timeout=45,
+        )
+        payload = parse_json_payload(content, {"community_summaries": []})
+        summaries = payload.get("community_summaries", [])
+    except Exception:
+        summaries = []
+    by_id = {item.get("community_id"): item for item in summaries if isinstance(item, dict)}
+    rows = []
+    for community in communities[:max_items]:
+        summary = by_id.get(community["id"], {})
+        rows.append(
+            {
+                "community_id": community["id"],
+                "title": summary.get("title") or community["label"],
+                "summary": summary.get("summary") or f"Entities: {', '.join(community.get('entity_labels', [])[:6])}",
+                "node_ids": community["node_ids"],
+            }
+        )
+    return rows
+
+
 def build_document_graph(chunks, focus_chunk_ids=None):
     focus_chunk_ids = set(focus_chunk_ids or [])
     selected_chunks = chunks
@@ -999,9 +1559,12 @@ def build_document_graph(chunks, focus_chunk_ids=None):
     edges = {}
     entity_to_sections = {}
     section_entities = {}
+    title_to_sections = {}
 
     document_id = "document:pdf"
     nodes[document_id] = {"id": document_id, "label": "Document", "type": "document", "weight": len(selected_chunks)}
+
+    relationships = llm_extract_relationships(selected_chunks) or fallback_relationships(selected_chunks)
 
     for chunk in selected_chunks:
         section_id = graph_node_id("section", chunk["chunk_id"])
@@ -1023,7 +1586,11 @@ def build_document_graph(chunks, focus_chunk_ids=None):
             "weight": 1,
         }
 
+        chunk_title = extract_chunk_title(chunk["chunk_text"])
         entities = extract_entities(chunk["chunk_text"])
+        if chunk_title:
+            entities = unique_preserve_order([chunk_title, *entities])
+            title_to_sections.setdefault(normalize_entity_label(chunk_title), set()).add(section_id)
         section_entities[section_id] = entities
         claim_ids = []
         for entity in entities:
@@ -1083,11 +1650,52 @@ def build_document_graph(chunks, focus_chunk_ids=None):
                     }
                 edges[key]["weight"] += 1
 
+    chunks_by_id = {chunk["chunk_id"]: chunk for chunk in selected_chunks}
+    for rel in relationships:
+        source = rel["source_entity"]
+        target = rel["target_entity"]
+        relation = rel["relationship"] or "related_to"
+        evidence_chunk_id = rel["evidence_chunk_id"]
+        source_id = graph_node_id("entity", source)
+        target_id = graph_node_id("entity", target)
+        for entity_id, label in ((source_id, source), (target_id, target)):
+            nodes.setdefault(
+                entity_id,
+                {"id": entity_id, "label": label, "type": "entity", "weight": 0},
+            )
+            nodes[entity_id]["weight"] += 1
+        edge_key = (source_id, target_id, relation)
+        edges[edge_key] = {
+            "source": source_id,
+            "target": target_id,
+            "type": relation,
+            "weight": max(1, int(round(rel.get("confidence", 0.7) * 3))),
+            "evidence_chunk_id": evidence_chunk_id,
+            "confidence": rel.get("confidence", 0.7),
+        }
+        section_id = graph_node_id("section", evidence_chunk_id)
+        if evidence_chunk_id in chunks_by_id:
+            entity_to_sections.setdefault(source_id, set()).add(section_id)
+            entity_to_sections.setdefault(target_id, set()).add(section_id)
+            edges[(source_id, section_id, "evidence_for")] = {
+                "source": source_id,
+                "target": section_id,
+                "type": "evidence_for",
+                "weight": 1,
+            }
+            edges[(target_id, section_id, "evidence_for")] = {
+                "source": target_id,
+                "target": section_id,
+                "type": "evidence_for",
+                "weight": 1,
+            }
+
     return {
         "nodes": list(nodes.values()),
         "edges": list(edges.values()),
         "entity_to_sections": entity_to_sections,
         "section_entities": section_entities,
+        "relationships": relationships,
     }
 
 
@@ -1097,8 +1705,8 @@ def run_graph_retrieval(query_text, top_k=5):
     vector_result, _, vector_candidates = run_vector_retrieval(query_text, top_k=top_k, candidate_k=18)
     bm25_result, _, bm25_candidates = run_bm25_retrieval(query_text, top_k=top_k, candidate_k=18)
     seeded_ids = {row["chunk_id"] for row in vector_candidates + bm25_candidates}
-    graph = build_document_graph(chunks, focus_chunk_ids=seeded_ids)
-    nodes_by_id = {node["id"]: node for node in graph["nodes"]}
+    graph = load_graph_artifacts(STORE_DIR, chunks)
+    nodes_by_id = graph.get("_nodes_by_id") or {node["id"]: node for node in graph["nodes"]}
     chunks_by_id = {chunk["chunk_id"]: chunk for chunk in chunks}
     query_entities = extract_entities(query_text, max_entities=8)
     query_terms = set(tokenize(query_text))
@@ -1106,7 +1714,9 @@ def run_graph_retrieval(query_text, top_k=5):
     bm25_rank_by_id = {row["chunk_id"]: row["rank"] for row in bm25_candidates}
 
     matched_entity_ids = []
-    entity_nodes = [node for node in graph["nodes"] if node["type"] == "entity"]
+    entity_nodes = graph.get("_entity_nodes") or [node for node in graph["nodes"] if node["type"] == "entity"]
+    normalized_query_entities = {normalize_entity_label(entity) for entity in query_entities}
+    normalized_query_text = normalize_entity_label(query_text)
     for entity in query_entities:
         entity_key = entity.lower()
         for node in entity_nodes:
@@ -1122,18 +1732,25 @@ def run_graph_retrieval(query_text, top_k=5):
     matched_entity_ids = list(dict.fromkeys(matched_entity_ids))[:8]
 
     section_scores = {}
+    score_breakdown = {}
     path_rows = []
+    relationship_adjacency = graph.get("_relationship_adjacency", {})
     for candidate in vector_candidates:
         section_id = graph_node_id("section", candidate["chunk_id"])
-        section_scores[section_id] = section_scores.get(section_id, 0.0) + reciprocal_rank(candidate["rank"], k=20) * 12
+        seed_score = reciprocal_rank(candidate["rank"], k=20) * 5
+        section_scores[section_id] = section_scores.get(section_id, 0.0) + seed_score
+        add_graph_score(score_breakdown, section_id, "vector_seed", seed_score, f"vector rank {candidate['rank']}")
     for candidate in bm25_candidates:
         section_id = graph_node_id("section", candidate["chunk_id"])
-        section_scores[section_id] = section_scores.get(section_id, 0.0) + reciprocal_rank(candidate["rank"], k=20) * 10
+        seed_score = reciprocal_rank(candidate["rank"], k=20) * 4
+        section_scores[section_id] = section_scores.get(section_id, 0.0) + seed_score
+        add_graph_score(score_breakdown, section_id, "bm25_seed", seed_score, f"bm25 rank {candidate['rank']}")
 
     for entity_id in matched_entity_ids:
         sections = graph["entity_to_sections"].get(entity_id, set())
         for section_id in sections:
-            section_scores[section_id] = section_scores.get(section_id, 0.0) + 2.5
+            section_scores[section_id] = section_scores.get(section_id, 0.0) + 6.0
+            add_graph_score(score_breakdown, section_id, "direct_entity", 6.0, nodes_by_id[entity_id]["label"])
             path_rows.append(
                 {
                     "query": query_text,
@@ -1142,12 +1759,12 @@ def run_graph_retrieval(query_text, top_k=5):
                     "section_id": section_id,
                     "section": nodes_by_id[section_id]["label"],
                     "edge_type": "mentions",
+                    "path_depth": 0,
+                    "score": 6.0,
                 }
             )
 
-        for edge in graph["edges"]:
-            if edge["type"] != "co-occurs":
-                continue
+        for edge in relationship_adjacency.get(entity_id, [])[:24]:
             neighbor_id = None
             if edge["source"] == entity_id:
                 neighbor_id = edge["target"]
@@ -1156,7 +1773,9 @@ def run_graph_retrieval(query_text, top_k=5):
             if not neighbor_id:
                 continue
             for section_id in graph["entity_to_sections"].get(neighbor_id, set()):
-                section_scores[section_id] = section_scores.get(section_id, 0.0) + 1.0
+                path_score = 2.5 + float(edge.get("confidence", 0.4)) * 2.0 + min(1.5, edge.get("weight", 1) * 0.2)
+                section_scores[section_id] = section_scores.get(section_id, 0.0) + path_score
+                add_graph_score(score_breakdown, section_id, "one_hop_relationship", path_score, f"{nodes_by_id[entity_id]['label']} -> {nodes_by_id.get(neighbor_id, {}).get('label', neighbor_id)}")
                 path_rows.append(
                     {
                         "query": query_text,
@@ -1166,9 +1785,58 @@ def run_graph_retrieval(query_text, top_k=5):
                         "related_entity": nodes_by_id[neighbor_id]["label"],
                         "section_id": section_id,
                         "section": nodes_by_id[section_id]["label"],
-                        "edge_type": "co-occurs",
+                        "edge_type": edge["type"],
+                        "path_depth": 1,
+                        "score": round(path_score, 6),
                     }
                 )
+                for second_edge in relationship_adjacency.get(neighbor_id, [])[:16]:
+                    second_neighbor_id = None
+                    if second_edge["source"] == neighbor_id and second_edge["target"] != entity_id:
+                        second_neighbor_id = second_edge["target"]
+                    elif second_edge["target"] == neighbor_id and second_edge["source"] != entity_id:
+                        second_neighbor_id = second_edge["source"]
+                    if not second_neighbor_id:
+                        continue
+                    second_score = 1.1 + float(second_edge.get("confidence", 0.35))
+                    for second_section_id in graph["entity_to_sections"].get(second_neighbor_id, set()):
+                        section_scores[second_section_id] = section_scores.get(second_section_id, 0.0) + second_score
+                        add_graph_score(score_breakdown, second_section_id, "two_hop_relationship", second_score, f"{nodes_by_id[entity_id]['label']} -> {nodes_by_id.get(neighbor_id, {}).get('label', neighbor_id)} -> {nodes_by_id.get(second_neighbor_id, {}).get('label', second_neighbor_id)}")
+                        path_rows.append(
+                            {
+                                "query": query_text,
+                                "entity_id": entity_id,
+                                "entity": nodes_by_id[entity_id]["label"],
+                                "related_entity_id": second_neighbor_id,
+                                "related_entity": nodes_by_id[second_neighbor_id]["label"],
+                                "section_id": second_section_id,
+                                "section": nodes_by_id[second_section_id]["label"],
+                                "edge_type": second_edge["type"],
+                                "path_depth": 2,
+                                "score": round(second_score, 6),
+                            }
+                        )
+
+    title_matches = []
+    for section_id, entities in graph["section_entities"].items():
+        section_title = normalize_entity_label(entities[0] if entities else "")
+        if not section_title:
+            continue
+        exact_entity_match = section_title in normalized_query_entities
+        query_contains_title = section_title and section_title in normalized_query_text
+        title_contains_query_entity = any(entity and entity in section_title for entity in normalized_query_entities)
+        if exact_entity_match or query_contains_title or title_contains_query_entity:
+            title_score = 8.0 if exact_entity_match or query_contains_title else 4.0
+            section_scores[section_id] = section_scores.get(section_id, 0.0) + title_score
+            add_graph_score(score_breakdown, section_id, "title_entity_match", title_score, entities[0])
+            title_matches.append(
+                {
+                    "entity": entities[0],
+                    "section_id": section_id,
+                    "section": nodes_by_id.get(section_id, {}).get("label", section_id),
+                    "score": title_score,
+                }
+            )
 
     if not section_scores:
         bm25_result, _, bm25_candidates = run_bm25_retrieval(query_text, top_k=top_k, candidate_k=top_k)
@@ -1195,14 +1863,17 @@ def run_graph_retrieval(query_text, top_k=5):
                 used_entity_ids.add(path["related_entity_id"])
 
     used_node_ids = used_section_ids | used_entity_ids | {"document:pdf"}
-    subgraph_edges = [
-        edge for edge in graph["edges"]
-        if edge["source"] in used_node_ids and edge["target"] in used_node_ids
-    ]
-    for edge in graph["edges"]:
-        if edge["type"] == "supports" and edge["target"] in used_section_ids:
-            subgraph_edges.append(edge)
+    subgraph_edges_by_key = {}
+    edge_adjacency = graph.get("_edge_adjacency", {})
+    for node_id in list(used_node_ids):
+        for edge in edge_adjacency.get(node_id, []):
+            if edge["source"] in used_node_ids and edge["target"] in used_node_ids:
+                subgraph_edges_by_key[(edge["source"], edge["target"], edge.get("type"))] = edge
+    for section_id in used_section_ids:
+        for edge in graph.get("_support_edges_by_target", {}).get(section_id, []):
+            subgraph_edges_by_key[(edge["source"], edge["target"], edge.get("type"))] = edge
             used_node_ids.add(edge["source"])
+    subgraph_edges = list(subgraph_edges_by_key.values())
     used_node_ids |= {edge["source"] for edge in subgraph_edges} | {edge["target"] for edge in subgraph_edges}
     highlighted_subgraph = {
         "nodes": [node for node in graph["nodes"] if node["id"] in used_node_ids],
@@ -1229,20 +1900,44 @@ def run_graph_retrieval(query_text, top_k=5):
                 "section_id": section_id,
                 "section_label": section_node.get("label", "Section"),
                 "matched_entities": section_entity_labels,
+                "score_breakdown": score_breakdown.get(section_id, {}),
                 "chunk_text_preview": chunk.get("preview", ""),
                 "full_chunk_text": chunk.get("chunk_text", ""),
             }
         )
 
-    communities = []
-    page_groups = {}
-    for node in graph["nodes"]:
-        if node["type"] == "section":
-            page = node.get("page_number", 0)
-            bucket = ((page - 1) // 20) + 1 if page else 0
-            page_groups.setdefault(bucket, {"id": f"community:{bucket}", "label": f"Pages {(bucket - 1) * 20 + 1}-{bucket * 20}", "node_ids": []})
-            page_groups[bucket]["node_ids"].append(node["id"])
-    communities = list(page_groups.values())[:10]
+    communities = graph.get("communities", [])
+    community_summaries = graph.get("community_summaries", [])
+    community_hits = []
+    for community in communities:
+        labels = [normalize_entity_label(label) for label in community.get("entity_labels", [])]
+        overlap = [label for label in labels if label in normalized_query_entities or label in normalized_query_text]
+        related_sections = set()
+        for node_id in community.get("node_ids", []):
+            related_sections |= set(graph["entity_to_sections"].get(node_id, set()))
+        hit_score = len(overlap) * 3 + len(related_sections & used_section_ids)
+        if hit_score:
+            community_hits.append(
+                {
+                    "community_id": community["id"],
+                    "label": community["label"],
+                    "score": hit_score,
+                    "matched_entities": overlap[:8],
+                    "used_section_count": len(related_sections & used_section_ids),
+                }
+            )
+    community_hits.sort(key=lambda item: -item["score"])
+    subgraph_retrieval_trace = [
+        {
+            "rank": rank,
+            "section_id": section_id,
+            "score": round(score, 6),
+            "matched_path_count": len([path for path in path_rows if path.get("section_id") == section_id]),
+            "used_in_answer_subgraph": section_id in used_section_ids,
+            "score_breakdown": score_breakdown.get(section_id, {}),
+        }
+        for rank, (section_id, score) in enumerate(ranked_sections, start=1)
+    ]
 
     result = {
         "mode": "graph",
@@ -1250,14 +1945,30 @@ def run_graph_retrieval(query_text, top_k=5):
         "query": query_text,
         "query_entities": query_entities,
         "matched_entities": [nodes_by_id[entity_id]["label"] for entity_id in matched_entity_ids if entity_id in nodes_by_id],
+        "entity_matches": [
+            {"entity_id": entity_id, "entity": nodes_by_id[entity_id]["label"]}
+            for entity_id in matched_entity_ids
+            if entity_id in nodes_by_id
+        ] + title_matches[:12],
         "results": results,
         "path_explanation": path_rows[:20],
+        "relationship_paths": sorted(path_rows, key=lambda item: -item.get("score", 0.0))[:40],
+        "relationships": graph.get("relationships", [])[:80],
+        "communities": communities,
+        "community_summaries": community_summaries,
+        "community_hits": community_hits[:10],
+        "subgraph_retrieval_trace": subgraph_retrieval_trace,
+        "graph_score_breakdown": {
+            section_id: score_breakdown.get(section_id, {})
+            for section_id, _score in ranked_sections
+        },
         "graph_stats": {
             "node_count": len(graph["nodes"]),
             "edge_count": len(graph["edges"]),
             "used_node_count": len(highlighted_subgraph["nodes"]),
             "claim_count": len([node for node in graph["nodes"] if node["type"] == "claim"]),
             "seeded_chunk_count": len(seeded_ids),
+            "graph_cache": graph.get("graph_metadata", {}),
         },
         "component_results": {
             "vector": vector_result["results"],
@@ -1275,9 +1986,18 @@ def run_graph_retrieval(query_text, top_k=5):
         "highlighted_subgraph": highlighted_subgraph,
         "query_path": path_rows[:20],
         "communities": communities,
+        "community_summaries": community_summaries,
+        "community_hits": community_hits[:10],
+        "relationships": graph.get("relationships", [])[:80],
+        "relationship_paths": sorted(path_rows, key=lambda item: -item.get("score", 0.0))[:40],
+        "subgraph_retrieval_trace": subgraph_retrieval_trace,
+        "graph_score_breakdown": {
+            section_id: score_breakdown.get(section_id, {})
+            for section_id, _score in ranked_sections
+        },
         "filters": {
             "node_types": ["document", "entity", "section", "claim"],
-            "edge_types": ["mentions", "supports", "co-occurs", "located_in"],
+            "edge_types": ["mentions", "supports", "co-occurs", "located_in", "evidence_for", "relationship"],
         },
     }
     return result, vis, highlighted_subgraph
@@ -1520,6 +2240,82 @@ def run_vectorless_retrieval(query_text, top_k=5):
     return result, vis, tree
 
 
+def llm_plan_agentic_steps(query_text, state):
+    prompt = (
+        "Plan a RAG tool loop. Return JSON only with key decisions, an array of 2-5 objects. "
+        "Each object must include decision, tool, reason_summary, confidence, next_action. "
+        "Do not include hidden chain-of-thought.\n\n"
+        f"Question: {query_text}\n"
+        f"State: {json.dumps(state, ensure_ascii=False)}"
+    )
+    try:
+        content = deepseek_chat(
+            [
+                {"role": "system", "content": "You are a concise RAG planner. Return structured decisions only."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=600,
+            temperature=0.0,
+            timeout=35,
+        )
+        payload = parse_json_payload(content, {"decisions": []})
+        decisions = payload.get("decisions", [])
+    except Exception:
+        decisions = []
+    cleaned = []
+    available = set(state.get("available_tools", []))
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        tool = str(item.get("tool", "hybrid")).lower()
+        if tool not in available:
+            tool = "hybrid"
+        try:
+            confidence = max(0.0, min(1.0, float(item.get("confidence", 0.65))))
+        except Exception:
+            confidence = 0.65
+        cleaned.append(
+            {
+                "step": len(cleaned) + 1,
+                "decision": str(item.get("decision") or f"Use {tool}"),
+                "tool": tool,
+                "query": str(item.get("query") or query_text),
+                "reason_summary": str(item.get("reason_summary") or "Selected from available retrieval signals."),
+                "confidence": round(confidence, 3),
+                "result_count": 0,
+                "next_action": str(item.get("next_action") or "retrieve"),
+                "planner_source": "deepseek",
+            }
+        )
+    if cleaned:
+        return cleaned[:5]
+    fallback_tool = "hybrid" if state.get("query_terms") else "vector"
+    return [
+        {
+            "step": 1,
+            "decision": f"Use {fallback_tool} retrieval",
+            "tool": fallback_tool,
+            "query": query_text,
+            "reason_summary": "Fallback planner selected the strongest available local route.",
+            "confidence": 0.62,
+            "result_count": 0,
+            "next_action": "retrieve",
+            "planner_source": "heuristic",
+        },
+        {
+            "step": 2,
+            "decision": "Use second-hop retrieval if bridge terms appear",
+            "tool": "second_hop",
+            "query": query_text,
+            "reason_summary": "Multi-hop questions may need bridge evidence.",
+            "confidence": 0.58,
+            "result_count": 0,
+            "next_action": "extract_bridge",
+            "planner_source": "heuristic",
+        },
+    ]
+
+
 def run_agentic_retrieval(query_text, top_k=5):
     """Plan, call retrieval tools, critique evidence, optionally retry, then accept evidence."""
     vector_result, _, vector_candidates = run_vector_retrieval(query_text, top_k=top_k, candidate_k=14)
@@ -1531,6 +2327,18 @@ def run_agentic_retrieval(query_text, top_k=5):
     lexical_signal = len(query_terms) - len(missing_terms)
     has_vector = len(vector_candidates) > 0
     primary_tool = "hybrid" if (lexical_signal >= 2 and has_vector) else ("bm25" if lexical_signal >= 1 else "vector")
+    planner_decisions = llm_plan_agentic_steps(
+        query_text,
+        {
+            "query_terms": query_terms,
+            "missing_terms": missing_terms,
+            "vector_candidates": len(vector_candidates),
+            "bm25_candidates": len(bm25_candidates),
+            "available_tools": ["vector", "hybrid", "graph", "rerank", "second_hop", "web_search", "answer"],
+        },
+    )
+    if planner_decisions:
+        primary_tool = planner_decisions[0].get("tool") or primary_tool
 
     vector_by_id = {row["chunk_id"]: row for row in vector_candidates}
     bm25_by_id = {row["chunk_id"]: row for row in bm25_candidates}
@@ -1581,7 +2389,8 @@ def run_agentic_retrieval(query_text, top_k=5):
 
     rows.sort(key=lambda item: (-item["critique_score"], item["page_number"], item["chunk_index"]))
     accepted = [row for row in rows if not row["rejection_reason"]][:top_k]
-    retry_used = len(accepted) < top_k
+    planner_confidence = min([row.get("confidence", 0.65) for row in planner_decisions], default=0.65)
+    retry_used = len(accepted) < top_k or planner_confidence < 0.45
     if retry_used:
         hybrid_result, _, hybrid_rows = run_hybrid_retrieval(query_text, top_k=top_k, candidate_k=16)
         accepted_ids = {row["chunk_id"] for row in accepted}
@@ -1613,6 +2422,151 @@ def run_agentic_retrieval(query_text, top_k=5):
             accepted_ids.add(hybrid_row["chunk_id"])
 
     rejected = [row for row in rows if row["chunk_id"] not in {item["chunk_id"] for item in accepted}][:8]
+    multihop_result, multihop_vis, _ = run_multihop_retrieval(query_text, top_k=top_k)
+    bridge_terms = multihop_result.get("bridge_terms", [])
+    hop_queries = multihop_result.get("hop_queries", [query_text])
+    for hop_row in multihop_result.get("results", []):
+        if len(accepted) >= top_k:
+            break
+        if hop_row["chunk_id"] in {item["chunk_id"] for item in accepted}:
+            continue
+        accepted.append(
+            {
+                "chunk_id": hop_row["chunk_id"],
+                "page_number": hop_row["page_number"],
+                "chunk_index": chunks_by_id[hop_row["chunk_id"]]["chunk_index"],
+                "chunk_text_preview": hop_row["chunk_text_preview"],
+                "full_chunk_text": hop_row["full_chunk_text"],
+                "vector_rank": None,
+                "bm25_rank": None,
+                "matched_terms": [],
+                "source": hop_row.get("hop_role", "multi-hop"),
+                "critique_score": hop_row.get("multihop_score", 0.0),
+                "rejection_reason": "",
+                "multi_hop_added": True,
+            }
+        )
+    tool_execution_trace = []
+    executed_tools = {"vector", "bm25", "second_hop"}
+    no_new_rounds = 0
+    for decision in planner_decisions[:3]:
+        tool = decision.get("tool", "hybrid")
+        tool_query = decision.get("query") or query_text
+        if tool == "answer":
+            decision["result_count"] = len(accepted)
+            tool_execution_trace.append({**decision, "status": "stopped"})
+            break
+        if len(accepted) >= top_k and decision.get("confidence", 0.0) >= 0.72:
+            decision["result_count"] = len(accepted)
+            tool_execution_trace.append({**decision, "status": "answer_ready"})
+            break
+        if tool in executed_tools and tool not in {"web_search"}:
+            decision["result_count"] = 0
+            tool_execution_trace.append({**decision, "status": "skipped_duplicate"})
+            continue
+
+        before_count = len(accepted)
+        tool_rows = []
+        status = "complete"
+        if tool == "hybrid":
+            _tool_result, _tool_vis, hybrid_rows = run_hybrid_retrieval(tool_query, top_k=top_k, candidate_k=16)
+            tool_rows = [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "page_number": row["page_number"],
+                    "chunk_index": chunks_by_id[row["chunk_id"]]["chunk_index"],
+                    "chunk_text_preview": row.get("preview") or row.get("chunk_text_preview", ""),
+                    "full_chunk_text": row.get("full_chunk_text", ""),
+                    "vector_rank": row.get("vector_rank"),
+                    "bm25_rank": row.get("bm25_rank"),
+                    "matched_terms": row.get("matched_terms", []),
+                    "source": row.get("source", "hybrid"),
+                    "critique_score": row.get("fusion_score", 0.0),
+                    "rejection_reason": "",
+                    "tool_added": "hybrid",
+                }
+                for row in hybrid_rows[:top_k]
+            ]
+        elif tool == "rerank":
+            rerank_result, _rerank_vis, _rerank_rows = run_rerank_retrieval(tool_query, top_k=top_k, candidate_k=18)
+            tool_rows = [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "page_number": row["page_number"],
+                    "chunk_index": chunks_by_id[row["chunk_id"]]["chunk_index"],
+                    "chunk_text_preview": row.get("chunk_text_preview", ""),
+                    "full_chunk_text": row.get("full_chunk_text", ""),
+                    "vector_rank": row.get("before_rank"),
+                    "bm25_rank": None,
+                    "matched_terms": row.get("matched_terms", []),
+                    "source": "rerank",
+                    "critique_score": row.get("reranker_score", 0.0),
+                    "rejection_reason": "",
+                    "tool_added": "rerank",
+                }
+                for row in rerank_result.get("results", [])
+            ]
+        elif tool == "graph":
+            graph_result, _graph_vis, _graph_rows = run_graph_retrieval(tool_query, top_k=top_k)
+            tool_rows = [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "page_number": row["page_number"],
+                    "chunk_index": chunks_by_id.get(row["chunk_id"], {}).get("chunk_index", 0),
+                    "chunk_text_preview": row.get("chunk_text_preview", ""),
+                    "full_chunk_text": row.get("full_chunk_text", ""),
+                    "vector_rank": row.get("vector_rank"),
+                    "bm25_rank": row.get("bm25_rank"),
+                    "matched_terms": row.get("matched_entities", []),
+                    "source": "graph",
+                    "critique_score": row.get("graph_score", 0.0),
+                    "rejection_reason": "",
+                    "tool_added": "graph",
+                }
+                for row in graph_result.get("results", [])
+                if row.get("chunk_id") in chunks_by_id
+            ]
+        elif tool == "web_search":
+            web_payload = run_tavily_search_tool(tool_query, max_results=5)
+            status = "complete" if web_payload.get("results") else "unavailable"
+            tool_rows = [
+                {
+                    "chunk_id": row["chunk_id"],
+                    "page_number": row["page_number"],
+                    "chunk_index": 0,
+                    "chunk_text_preview": row.get("chunk_text_preview", ""),
+                    "full_chunk_text": row.get("full_chunk_text", ""),
+                    "vector_rank": None,
+                    "bm25_rank": None,
+                    "matched_terms": [],
+                    "source": "web_search",
+                    "critique_score": row.get("web_score", 0.0),
+                    "rejection_reason": "",
+                    "tool_added": "web_search",
+                    "url": row.get("url", ""),
+                    "title": row.get("title", ""),
+                    "snippet": row.get("snippet", ""),
+                    "provider": row.get("provider", "tavily"),
+                }
+                for row in web_payload.get("results", [])
+            ]
+            if web_payload.get("error"):
+                decision["error"] = web_payload["error"]
+        executed_tools.add(tool)
+        accepted_ids = {row["chunk_id"] for row in accepted}
+        for tool_row in tool_rows:
+            if len(accepted) >= top_k:
+                break
+            if tool_row["chunk_id"] in accepted_ids:
+                continue
+            accepted.append(tool_row)
+            accepted_ids.add(tool_row["chunk_id"])
+        added_count = len(accepted) - before_count
+        decision["result_count"] = added_count
+        tool_execution_trace.append({**decision, "status": status})
+        no_new_rounds = no_new_rounds + 1 if added_count == 0 else 0
+        if no_new_rounds >= 2:
+            break
     results = [
         {
             "rank": rank,
@@ -1624,12 +2578,21 @@ def run_agentic_retrieval(query_text, top_k=5):
             "bm25_rank": row.get("bm25_rank"),
             "matched_terms": row.get("matched_terms", []),
             "accepted_reason": (
+                "accepted from multi-hop bridge retrieval"
+                if row.get("multi_hop_added")
+                else
+                f"accepted from {row.get('tool_added')} tool"
+                if row.get("tool_added")
+                else
                 "retry accepted by hybrid fallback"
                 if row.get("retry_added")
                 else "accepted after evidence critique"
             ),
             "chunk_text_preview": row["chunk_text_preview"],
             "full_chunk_text": row["full_chunk_text"],
+            "url": row.get("url"),
+            "title": row.get("title"),
+            "snippet": row.get("snippet"),
         }
         for rank, row in enumerate(accepted[:top_k], start=1)
     ]
@@ -1638,24 +2601,45 @@ def run_agentic_retrieval(query_text, top_k=5):
         {"step": 1, "tool": "planner", "label": "Plan", "status": "complete", "duration_ms": 8, "detail": f"Primary route: {primary_tool}"},
         {"step": 2, "tool": "vector", "label": "Vector retrieve", "status": "complete", "duration_ms": 42, "detail": f"{len(vector_candidates)} semantic candidates"},
         {"step": 3, "tool": "bm25", "label": "BM25 retrieve", "status": "complete", "duration_ms": 25, "detail": f"{len(bm25_candidates)} lexical candidates"},
-        {"step": 4, "tool": "critic", "label": "Critique evidence", "status": "complete", "duration_ms": 14, "detail": f"{len(rejected)} rejected"},
-        {"step": 5, "tool": "retry", "label": "Retry if needed", "status": "complete" if retry_used else "skipped", "duration_ms": 35 if retry_used else 0, "detail": "hybrid fallback" if retry_used else "enough evidence"},
-        {"step": 6, "tool": "answer", "label": "Answer", "status": "ready", "duration_ms": 0, "detail": f"{len(results)} accepted evidence chunks"},
+        {"step": 4, "tool": "bridge", "label": "Extract bridge", "status": "complete", "duration_ms": 18, "detail": ", ".join(bridge_terms[:4]) or "no bridge terms"},
+        {"step": 5, "tool": "hop2", "label": "Second-hop retrieve", "status": "complete", "duration_ms": 46, "detail": hop_queries[-1] if hop_queries else query_text},
+        {"step": 6, "tool": "critic", "label": "Decide evidence", "status": "complete", "duration_ms": 14, "detail": f"{len(rejected)} rejected"},
+        *[
+            {
+                "step": 7 + index,
+                "tool": item.get("tool"),
+                "label": item.get("tool", "tool").replace("_", " ").title(),
+                "status": item.get("status", "complete"),
+                "duration_ms": 0,
+                "detail": f"{item.get('result_count', 0)} new results | {item.get('query', query_text)}",
+            }
+            for index, item in enumerate(tool_execution_trace)
+        ],
+        {"step": 7 + len(tool_execution_trace), "tool": "retry", "label": "Retry if needed", "status": "complete" if retry_used else "skipped", "duration_ms": 35 if retry_used else 0, "detail": "hybrid fallback" if retry_used else "enough evidence"},
+        {"step": 8 + len(tool_execution_trace), "tool": "answer", "label": "Answer", "status": "ready", "duration_ms": 0, "detail": f"{len(results)} accepted evidence chunks"},
     ]
     flow_nodes = [
         {"id": "plan", "label": "Plan", "type": "decision", "status": "complete"},
         {"id": "choose", "label": f"Choose {primary_tool}", "type": "decision", "status": "complete"},
         {"id": "retrieve", "label": "Call tools", "type": "tool", "status": "complete"},
-        {"id": "inspect", "label": "Inspect evidence", "type": "tool", "status": "complete"},
-        {"id": "critique", "label": "Critique", "type": "decision", "status": "complete"},
+        {"id": "graph", "label": "Graph", "type": "tool", "status": "complete" if any(item.get("tool") == "graph" for item in tool_execution_trace) else "skipped"},
+        {"id": "rerank", "label": "Rerank", "type": "tool", "status": "complete" if any(item.get("tool") == "rerank" for item in tool_execution_trace) else "skipped"},
+        {"id": "web", "label": "Web", "type": "tool", "status": "complete" if any(item.get("tool") == "web_search" for item in tool_execution_trace) else "skipped"},
+        {"id": "bridge", "label": "Bridge", "type": "tool", "status": "complete"},
+        {"id": "hop2", "label": "Hop 2", "type": "tool", "status": "complete"},
+        {"id": "critique", "label": "Decide", "type": "decision", "status": "complete"},
         {"id": "retry", "label": "Retry", "type": "decision", "status": "complete" if retry_used else "skipped"},
         {"id": "answer", "label": "Answer", "type": "answer", "status": "ready"},
     ]
     flow_links = [
         {"source": "plan", "target": "choose"},
         {"source": "choose", "target": "retrieve"},
-        {"source": "retrieve", "target": "inspect"},
-        {"source": "inspect", "target": "critique"},
+        {"source": "retrieve", "target": "graph"},
+        {"source": "retrieve", "target": "rerank"},
+        {"source": "retrieve", "target": "web"},
+        {"source": "retrieve", "target": "bridge"},
+        {"source": "bridge", "target": "hop2"},
+        {"source": "hop2", "target": "critique"},
         {"source": "critique", "target": "retry"},
         {"source": "retry", "target": "answer"},
     ]
@@ -1663,7 +2647,10 @@ def run_agentic_retrieval(query_text, top_k=5):
         f"Query terms: {', '.join(query_terms[:10]) or 'none'}",
         f"Missing lexical terms: {', '.join(missing_terms) if missing_terms else 'none'}",
         f"Decision: use {primary_tool} because semantic candidates and lexical signal were inspected.",
-        f"Critique rule: accept evidence with source agreement, term coverage, or strong semantic score.",
+        f"Bridge terms: {', '.join(bridge_terms[:6]) if bridge_terms else 'none found'}",
+        f"Second-hop query: {hop_queries[-1] if hop_queries else query_text}",
+        f"Decision rule: accept evidence with source agreement, bridge confirmation, term coverage, or strong semantic score.",
+        f"Tool loop: {len(tool_execution_trace)} planned tool executions",
         f"Retry: {'hybrid fallback added evidence' if retry_used else 'not needed'}",
     ]
 
@@ -1678,8 +2665,18 @@ def run_agentic_retrieval(query_text, top_k=5):
             "accepted_count": len(results),
             "rejected_count": len(rejected),
             "retry_used": retry_used,
-            "tool_call_count": 3 if retry_used else 2,
+            "tool_call_count": len(tool_timeline),
+            "bridge_terms": bridge_terms,
+            "hop_count": multihop_result.get("hop_count", 2),
+            "planner_confidence": round(planner_confidence, 3),
         },
+        "planner_decisions": planner_decisions,
+        "tool_execution_trace": tool_execution_trace,
+        "bridge_terms": bridge_terms,
+        "hop_queries": hop_queries,
+        "hops": multihop_result.get("hops", []),
+        "reasoning_graph": multihop_vis.get("reasoning_graph", {}),
+        "hop_table": multihop_vis.get("hop_table", []),
         "tool_timeline": tool_timeline,
         "scratchpad": scratchpad,
         "rejected_evidence": [
@@ -1708,6 +2705,12 @@ def run_agentic_retrieval(query_text, top_k=5):
         "pipeline": "agentic_rag",
         "query": query_text,
         "control_flow": {"nodes": flow_nodes, "links": flow_links},
+        "planner_decisions": planner_decisions,
+        "tool_execution_trace": tool_execution_trace,
+        "reasoning_graph": multihop_vis.get("reasoning_graph", {}),
+        "hops": multihop_result.get("hops", []),
+        "bridge_terms": bridge_terms,
+        "hop_table": multihop_vis.get("hop_table", []),
         "tool_timeline": tool_timeline,
         "scratchpad": scratchpad,
         "rejected_evidence": result["rejected_evidence"],
@@ -1900,20 +2903,14 @@ def run_multihop_retrieval(query_text, top_k=5):
 
 
 def run_dynamic_retrieval(mode, query_text, top_k=5):
-    if mode == "bm25":
-        result, vis, _ = run_bm25_retrieval(query_text, top_k=top_k)
-    elif mode == "hybrid":
+    if mode == "hybrid":
         result, vis, _ = run_hybrid_retrieval(query_text, top_k=top_k)
-    elif mode == "rerank":
-        result, vis, _ = run_rerank_retrieval(query_text, top_k=top_k)
     elif mode == "graph":
         result, vis, _ = run_graph_retrieval(query_text, top_k=top_k)
-    elif mode == "vectorless":
-        result, vis, _ = run_vectorless_retrieval(query_text, top_k=top_k)
     elif mode == "agentic":
         result, vis, _ = run_agentic_retrieval(query_text, top_k=top_k)
-    elif mode == "multihop":
-        result, vis, _ = run_multihop_retrieval(query_text, top_k=top_k)
+    elif mode == "crag":
+        result, vis, _ = run_crag_retrieval(query_text, top_k=top_k)
     else:
         result, vis, _ = run_vector_retrieval(query_text, top_k=top_k)
     return result, vis
@@ -1924,6 +2921,19 @@ def persist_query_artifacts(mode, result, vis):
     prefix = pipeline_config["prefix"]
     write_json(FRONTEND_DATA_DIR / f"{prefix}_query_result.json", result)
     write_json(FRONTEND_DATA_DIR / f"{prefix}_vis.json", vis)
+
+
+def attach_standard_answer(query_text, result):
+    answer, answer_source = generate_answer_with_fallback(
+        query_text,
+        result.get("results", []),
+    )
+    return {
+        "answer": answer,
+        "answer_source": answer_source,
+        "answer_model": "deepseek-chat" if answer_source == "deepseek" else "fallback",
+        "evidence_count": len(result.get("results", [])),
+    }
 
 
 def get_pipeline_config(mode):
@@ -2134,13 +3144,16 @@ def run_query():
         result, vis = run_dynamic_retrieval(mode, query_text)
         log_event("info", "Retrieval completed", "query")
 
-        result, vis, answer_payload = self_heal_answer(mode, query_text, result, vis)
-        result.update(answer_payload)
-        verdict = result.get("critic", {}).get("verdict", "unknown")
-        if verdict == "accepted":
-            log_event("info", "Critic accepted grounded answer", "critic")
+        if mode == "crag":
+            result, vis, answer_payload = self_heal_answer(mode, query_text, result, vis)
+            result.update(answer_payload)
+            verdict = result.get("critic", {}).get("verdict", "unknown")
+            if verdict == "accepted":
+                log_event("info", "CRAG critic accepted grounded answer", "critic")
+            else:
+                log_event("warn", f"CRAG critic verdict: {verdict}", "critic")
         else:
-            log_event("warn", f"Critic verdict: {verdict}", "critic")
+            result.update(attach_standard_answer(query_text, result))
 
         persist_query_artifacts(mode if mode in PIPELINE_CONFIG else "naive", result, vis)
         return jsonify(result)
@@ -2178,7 +3191,7 @@ def evaluate_query():
             return jsonify({"error": f"No evaluation config for query: {query_text}"}), 400
 
         all_results = {}
-        for mode_key in ("naive", "bm25", "hybrid", "rerank", "graph", "vectorless", "agentic", "multihop"):
+        for mode_key in ("naive", "hybrid", "graph", "agentic", "crag"):
             try:
                 result, _ = run_dynamic_retrieval(mode_key, query_text)
                 all_results[mode_key] = {query_text: result.get("results", [])}

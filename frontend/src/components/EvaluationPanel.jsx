@@ -3,13 +3,28 @@ import React, { useEffect, useState } from 'react'
 const API_BASE = 'http://localhost:5000'
 
 const METHOD_LABELS = {
-  naive: 'Naive Vector', bm25: 'BM25', hybrid: 'Hybrid',
-  rerank: 'Rerank', graph: 'GraphRAG-lite', vectorless: 'Vectorless Tree',
-  agentic: 'Agentic', multihop: 'Multi-hop'
+  naive: 'Naive Vector',
+  hybrid: 'Hybrid',
+  graph: 'GraphRAG',
+  agentic: 'Agentic Multi-hop',
+  crag: 'CRAG + Rerank'
 }
 
-const METRIC_LABELS = {
-  'ndcg@5': 'NDCG@5', 'mrr': 'MRR', 'recall@5': 'Recall@5', 'precision@5': 'Precision@5'
+const RETRIEVAL_METRIC_LABELS = {
+  'precision@5': 'Precision@5',
+  'recall@5': 'Recall@5',
+  'hit@5': 'Hit@5',
+  'hit@10': 'Hit@10',
+  'mrr': 'MRR',
+  'map': 'MAP',
+  'ndcg@5': 'NDCG@5'
+}
+
+const ANSWER_METRIC_LABELS = {
+  exact_match: 'Exact Match',
+  token_f1: 'Token F1',
+  faithfulness: 'Faithfulness',
+  answer_relevancy: 'Answer Relevancy'
 }
 
 function scoreColor(score, best) {
@@ -19,9 +34,10 @@ function scoreColor(score, best) {
   return 'low'
 }
 
-function RadarChart({ metrics, methods }) {
+function RadarChart({ metrics, methods, labels = RETRIEVAL_METRIC_LABELS }) {
   if (!methods.length || !metrics) return null
-  const metricKeys = Object.keys(METRIC_LABELS)
+  const metricKeys = Object.keys(labels).filter((key) => metrics[key])
+  if (!metricKeys.length) return null
   const center = 160
   const radius = 130
   const n = metricKeys.length
@@ -77,7 +93,7 @@ function RadarChart({ metrics, methods }) {
           const p = getPoint(1.12, i)
           return (
             <text key={`label-${key}`} x={p.x} y={p.y} textAnchor="middle" fill="var(--muted)" fontSize="10" fontWeight="700">
-              {METRIC_LABELS[key]}
+              {labels[key]}
             </text>
           )
         })}
@@ -128,6 +144,7 @@ export default function EvaluationPanel({ queryText }) {
   const ranking = comparison.ranking || {}
   const bestMethod = ranking['ndcg@5']?.[0]?.method
   const sortedByNdcg = methods.slice().sort((a, b) => (metrics['ndcg@5']?.[b.id] || 0) - (metrics['ndcg@5']?.[a.id] || 0))
+  const answerMetricKeys = Object.keys(ANSWER_METRIC_LABELS).filter((key) => metrics[key])
 
   return (
     <section className="panel eval-panel">
@@ -141,20 +158,22 @@ export default function EvaluationPanel({ queryText }) {
       )}
 
       <article className="viz-card">
-        <h4>Performance Radar</h4>
-        <RadarChart metrics={metrics} methods={methods} />
+        <h4>Retrieval Performance Radar</h4>
+        <RadarChart metrics={metrics} methods={methods} labels={RETRIEVAL_METRIC_LABELS} />
       </article>
 
       <article className="viz-card">
-        <h4>Metric Leaderboard</h4>
+        <h4>Retrieval Metric Leaderboard</h4>
         <div className="eval-table">
           <div className="eval-table-header">
             <span>Method</span>
             <span>NDCG@5</span>
+            <span>Hit@5</span>
+            <span>Hit@10</span>
             <span>MRR</span>
             <span>Recall@5</span>
             <span>Prec@5</span>
-            <span>NDCG@10</span>
+            <span>MAP</span>
           </div>
           {sortedByNdcg.map((method, i) => {
             const best = metrics['ndcg@5']?.[sortedByNdcg[0]?.id] || 1
@@ -166,15 +185,37 @@ export default function EvaluationPanel({ queryText }) {
                   {i === 0 ? ' ' : ''}{method.label}
                 </span>
                 <span className={`eval-score ${scoreColor(s, best)}`}>{s.toFixed(3)}</span>
+                <span className="eval-score">{metrics['hit@5']?.[method.id]?.toFixed(3) || '-'}</span>
+                <span className="eval-score">{metrics['hit@10']?.[method.id]?.toFixed(3) || '-'}</span>
                 <span className="eval-score">{metrics['mrr']?.[method.id]?.toFixed(3) || '-'}</span>
                 <span className="eval-score">{metrics['recall@5']?.[method.id]?.toFixed(3) || '-'}</span>
                 <span className="eval-score">{metrics['precision@5']?.[method.id]?.toFixed(3) || '-'}</span>
-                <span className="eval-score">{metrics['ndcg@10']?.[method.id]?.toFixed(3) || '-'}</span>
+                <span className="eval-score">{metrics['map']?.[method.id]?.toFixed(3) || '-'}</span>
               </div>
             )
           })}
         </div>
       </article>
+
+      {answerMetricKeys.length > 0 && (
+        <article className="viz-card">
+          <h4>Answer Quality Leaderboard</h4>
+          <div className="eval-table">
+            <div className="eval-table-header" style={{ gridTemplateColumns: `1.2fr repeat(${answerMetricKeys.length}, .8fr)` }}>
+              <span>Method</span>
+              {answerMetricKeys.map((key) => <span key={key}>{ANSWER_METRIC_LABELS[key]}</span>)}
+            </div>
+            {methods.map((method) => (
+              <div key={`${method.id}-answer`} className="eval-table-row" style={{ gridTemplateColumns: `1.2fr repeat(${answerMetricKeys.length}, .8fr)` }}>
+                <span>{method.label}</span>
+                {answerMetricKeys.map((key) => (
+                  <span key={`${method.id}-${key}`} className="eval-score">{metrics[key]?.[method.id]?.toFixed?.(3) || '-'}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
     </section>
   )
 }

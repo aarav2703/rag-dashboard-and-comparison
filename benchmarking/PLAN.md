@@ -1,12 +1,12 @@
 # HotpotQA Benchmarking Plan
 
-Goal: add a structured HotpotQA adapter that can load benchmark examples into the existing shared corpus format, run all 8 retrieval modes, and report retrieval plus answer-quality metrics.
+Goal: add a structured HotpotQA adapter that can load benchmark examples into the existing shared corpus format, run the public retrieval modes, and report retrieval plus answer-quality metrics.
 
 ## Current Repo Hooks
 
 - Corpus store lives in `backend_or_exports/current_corpus`.
 - Retrieval modes already route through `backend.run_dynamic_retrieval(mode, query_text)`.
-- Supported mode keys: `naive`, `bm25`, `hybrid`, `rerank`, `graph`, `vectorless`, `agentic`, `multihop`.
+- Supported public mode keys: `naive`, `hybrid`, `graph`, `agentic`, `crag`.
 - Retrieval evaluation already works on returned `results` lists using `chunk_id`.
 - Current PDF pipeline builds `chunks.json`, `embeddings.npy`, `faiss.index`, `metadata.json`, and `projection.json`.
 
@@ -63,7 +63,7 @@ Responsibilities:
 - Reuse `shared_rag_store.load_embedding_model`, `embed_texts`, `build_faiss_index`, `project_embeddings`, and `write_json`.
 - Write a HotpotQA corpus into the existing `STORE_DIR`.
 - Include metadata with dataset name, config, split, sample size, chunk count, and embedding model.
-- Write frontend placeholder JSONs for all mode prefixes, matching `build_store`.
+- Write frontend placeholder JSONs for public mode prefixes, matching `build_store`.
 
 Expected store files:
 
@@ -77,7 +77,7 @@ Expected store files:
 
 Create `benchmarking/run_hotpot_benchmark.py`.
 
-Status: implemented. Smoke test passed in the `rag-multimodal` conda environment against synthetic artifacts using BM25.
+Status: implemented. Smoke test passed in the `rag-multimodal` conda environment against synthetic artifacts.
 
 Responsibilities:
 
@@ -150,7 +150,7 @@ Useful UI:
 1. Add adapter and generated artifact schema.
 2. Add HotpotQA store builder.
 3. Smoke-test one tiny sample, e.g. 5 validation examples.
-4. Add runner for all 8 modes.
+4. Add runner for all public modes.
 5. Add metrics aggregation.
 6. Run a real mini validation sample, e.g. 25 examples.
 7. Run a medium validation sample, e.g. 100 examples.

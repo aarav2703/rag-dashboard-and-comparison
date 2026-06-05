@@ -1,21 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react'
 import EmbeddingConstellation from './components/EmbeddingConstellation.jsx'
 import NaiveRagAnalytics from './components/NaiveRagAnalytics.jsx'
-import Bm25Analytics from './components/Bm25Analytics.jsx'
 import HybridAnalytics from './components/HybridAnalytics.jsx'
-import RerankAnalytics from './components/RerankAnalytics.jsx'
+import CragAnalytics from './components/RerankAnalytics.jsx'
 import GraphRagAnalytics from './components/GraphRagAnalytics.jsx'
-import VectorlessMarkdownAnalytics from './components/VectorlessMarkdownAnalytics.jsx'
 import AgenticRagAnalytics from './components/AgenticRagAnalytics.jsx'
-import MultiHopRagAnalytics from './components/MultiHopRagAnalytics.jsx'
 import MethodComparison from './components/MethodComparison.jsx'
 import ConsolePanel from './components/ConsolePanel.jsx'
-import AnswerCriticPanel from './components/AnswerCriticPanel.jsx'
 import { buildEmbeddings } from './lib/ragUtils.js'
 
 const API_BASE = 'http://localhost:5000'
 
-const METHOD_ICONS = { naive: '\u2606', bm25: '\u2261', hybrid: '\u29C8', rerank: '\u21C5', graph: '\u2B21', vectorless: '\u2B1A', agentic: '\u2699', multihop: '\u21CC', compare: '\u2981' }
+const METHOD_ICONS = { naive: '\u2606', hybrid: '\u29C8', graph: '\u2B21', agentic: '\u2699', crag: '\u21C5', compare: '\u2981' }
 
 const PIPELINES = {
   naive: {
@@ -25,13 +21,6 @@ const PIPELINES = {
     note: 'Semantic embedding retrieval with a 2D projection of chunks and query evidence.',
     evidenceMode: 'Semantic similarity'
   },
-  bm25: {
-    label: 'BM25 Lexical Retrieval',
-    shortLabel: 'BM25',
-    prefix: 'bm25_lexical',
-    note: 'Exact token matching with term rarity, highlight spans, and contribution scoring.',
-    evidenceMode: 'Exact lexical match'
-  },
   hybrid: {
     label: 'Hybrid RAG',
     shortLabel: 'Hybrid',
@@ -39,40 +28,26 @@ const PIPELINES = {
     note: 'Combines semantic and lexical candidates, then rank-fuses the merged evidence pool.',
     evidenceMode: 'Vector + BM25 fusion'
   },
-  rerank: {
-    label: 'Rerank RAG',
-    shortLabel: 'Rerank',
-    prefix: 'rerank_rag',
-    note: 'Retrieves a wider candidate set, then reranks candidates to improve top-k precision.',
-    evidenceMode: 'Candidate reranking'
-  },
   graph: {
-    label: 'GraphRAG-lite',
+    label: 'GraphRAG',
     shortLabel: 'Graph',
     prefix: 'graph_rag',
-    note: 'Extracts entity-section relationships and traverses the graph to find multi-hop evidence.',
-    evidenceMode: 'Entity graph traversal'
-  },
-  vectorless: {
-    label: 'Vectorless Markdown RAG',
-    shortLabel: 'Tree',
-    prefix: 'vectorless_markdown',
-    note: 'Reads the PDF through a markdown-like document tree instead of vector similarity.',
-    evidenceMode: 'Document structure navigation'
+    note: 'Builds a relationship graph, retrieves answer subgraphs, and highlights the evidence path toward full GraphRAG.',
+    evidenceMode: 'Graph subgraph retrieval'
   },
   agentic: {
-    label: 'Agentic RAG',
+    label: 'Agentic Multi-hop RAG',
     shortLabel: 'Agent',
     prefix: 'agentic_rag',
-    note: 'Plans retrieval, chooses tools, critiques evidence, retries when needed, then accepts final support.',
-    evidenceMode: 'Tool orchestration'
+    note: 'Plans tool use, extracts bridge clues, performs second-hop retrieval, and shows structured agent decisions.',
+    evidenceMode: 'Agent tool + bridge loop'
   },
-  multihop: {
-    label: 'Multi-hop RAG',
-    shortLabel: 'Hops',
-    prefix: 'multihop_rag',
-    note: 'Looks for a first passage, pulls out a bridge clue, then asks a second query to fill the missing step.',
-    evidenceMode: 'Hop-by-hop bridge retrieval'
+  crag: {
+    label: 'Corrective RAG with Reranking',
+    shortLabel: 'CRAG',
+    prefix: 'crag_rag',
+    note: 'Reranks candidate evidence, grades retrieval quality, rewrites or falls back when support is weak, then checks groundedness.',
+    evidenceMode: 'Rerank + corrective grading'
   },
   compare: {
     label: 'Compare All Methods',
@@ -89,8 +64,7 @@ const RUNNABLE_METHODS = Object.entries(PIPELINES)
   .map(([id, pipeline]) => ({ id, ...pipeline }))
 
 const INITIAL_METHOD_STATUS = {
-  naive: 'red', bm25: 'red', hybrid: 'red', rerank: 'red',
-  graph: 'red', vectorless: 'red', agentic: 'red', multihop: 'red'
+  naive: 'red', hybrid: 'red', graph: 'red', agentic: 'red', crag: 'red'
 }
 
 function InfoButton({ text }) {
@@ -154,13 +128,14 @@ function WorkspaceSummary({ chunks, queryResult, visData, activePipeline, source
 
 function MethodTimeline({ activePipeline, queryResult }) {
   const retrieved = queryResult?.results?.length || 0
-  const accepted = queryResult?.critic?.verdict === 'accepted'
+  const isCrag = queryResult?.mode === 'crag'
+  const accepted = isCrag && queryResult?.critic?.verdict === 'accepted'
   const steps = [
     { label: 'Load Corpus', detail: activePipeline.shortLabel },
     { label: 'Retrieve', detail: retrieved ? `${retrieved} chunks` : 'waiting' },
-    { label: 'Generate', detail: queryResult?.answer ? 'answer ready' : 'idle' },
-    { label: 'Critique', detail: queryResult?.critic?.verdict || 'pending' },
-    { label: 'Finalize', detail: accepted ? 'grounded' : queryResult?.answer ? 'review' : 'idle' }
+    { label: isCrag ? 'Rerank' : 'Generate', detail: queryResult?.answer ? 'answer ready' : 'idle' },
+    { label: isCrag ? 'Grade' : 'Finalize', detail: isCrag ? (queryResult?.critic?.verdict || queryResult?.crag_summary?.branch || 'pending') : (queryResult?.answer ? 'ready' : 'idle') },
+    { label: 'Answer', detail: accepted ? 'grounded' : queryResult?.answer ? 'ready' : 'idle' }
   ]
 
   return (
@@ -171,7 +146,7 @@ function MethodTimeline({ activePipeline, queryResult }) {
       </div>
       <div className="timeline common-timeline">
         {steps.map((step, index) => {
-          const isActive = Boolean(queryResult) && (index <= 1 || (index <= 3 && queryResult?.answer) || (index === 4 && queryResult?.critic))
+          const isActive = Boolean(queryResult) && (index <= 1 || (index <= 3 && queryResult?.answer) || (isCrag && index === 4 && queryResult?.critic))
           return (
             <div key={step.label} className={`timeline-step ${isActive ? 'active' : ''}`}>
               <span className="timeline-dot" />
@@ -181,6 +156,28 @@ function MethodTimeline({ activePipeline, queryResult }) {
         })}
       </div>
     </section>
+  )
+}
+
+function SimpleAnswerPanel({ queryResult, title = 'Answer' }) {
+  const results = queryResult?.results || []
+  return (
+    <div className="answer-critic-panel">
+      <div className="answer-critic-head">
+        <div>
+          <h4>{title}</h4>
+          <span>{queryResult?.answer_source || 'awaiting answer'} | {queryResult?.answer_model || 'no model'}</span>
+        </div>
+        <strong className="critic-verdict accepted">{queryResult?.answer ? 'Ready' : 'Pending'}</strong>
+      </div>
+      <p className="answer-critic-text">
+        {queryResult?.answer || results[0]?.chunk_text_preview || 'No answer available yet.'}
+      </p>
+      <div className="answer-critic-meta">
+        <span>Evidence {queryResult?.evidence_count ?? results.length}</span>
+        <span>{results.length ? `Top page P${results[0]?.page_number || '-'}` : 'No retrieval yet'}</span>
+      </div>
+    </div>
   )
 }
 
@@ -581,41 +578,20 @@ export default function App() {
                 <h3>{activePipeline.label}</h3>
                 <InfoButton text={activePipeline.note} />
               </div>
-              {pipelineMode === 'vectorless' ? (
-                <VectorlessMarkdownAnalytics queryResult={queryResult} visData={visData} />
-              ) : pipelineMode === 'graph' ? (
+              {pipelineMode === 'graph' ? (
                 <GraphRagAnalytics queryResult={queryResult} visData={visData} />
               ) : pipelineMode === 'agentic' ? (
                 <AgenticRagAnalytics queryResult={queryResult} visData={visData} />
-              ) : pipelineMode === 'multihop' ? (
-                <MultiHopRagAnalytics queryResult={queryResult} visData={visData} />
-              ) : pipelineMode === 'rerank' ? (
-                <RerankAnalytics queryResult={queryResult} visData={visData} />
+              ) : pipelineMode === 'crag' ? (
+                <CragAnalytics queryResult={queryResult} visData={visData} />
               ) : pipelineMode === 'hybrid' ? (
                 <HybridAnalytics queryResult={queryResult} visData={visData} />
-              ) : pipelineMode === 'bm25' ? (
-                <div className="panel bm25-hero" style={{ display: 'grid', gap: 12 }}>
-                  <h3>BM25 Evidence Overview</h3>
-                  <p className="coverage-note">Lexical retrieval ranks chunks by exact keyword overlap.</p>
-                  <div className="bm25-hero-grid">
-                    <div className="bm25-hero-stat"><span>Query terms</span><strong>{(visData?.query_terms || queryResult?.query_terms || []).length}</strong></div>
-                    <div className="bm25-hero-stat"><span>Missing terms</span><strong>{(visData?.missing_query_terms || queryResult?.missing_query_terms || []).length}</strong></div>
-                    <div className="bm25-hero-stat"><span>Retrieved</span><strong>{queryResult?.results?.length || 0}</strong></div>
-                    <div className="bm25-hero-stat"><span>Evidence mode</span><strong>{activePipeline.evidenceMode}</strong></div>
-                  </div>
-                  <div className="bm25-hero-tags">
-                    {(visData?.query_terms || queryResult?.query_terms || []).map((term) => <span key={term} className="bm25-term-tag">{term}</span>)}
-                  </div>
-                  {((visData?.missing_query_terms || queryResult?.missing_query_terms || []).length > 0) && (
-                    <div className="bm25-warning">Missing query terms: {(visData?.missing_query_terms || queryResult?.missing_query_terms || []).join(', ')}</div>
-                  )}
-                </div>
               ) : (
                 <>
                   <EmbeddingConstellation chunks={chunks} queryResult={queryResult} visData={visData} />
                   {pipelineMode === 'naive' && (
                     <div className="below-visual-answer">
-                      <AnswerCriticPanel queryResult={queryResult} title="Naive Vector Answer" />
+                      <SimpleAnswerPanel queryResult={queryResult} title="Naive Vector Answer" />
                     </div>
                   )}
                 </>
@@ -623,18 +599,7 @@ export default function App() {
             </section>
 
             <aside className="main-analytics">
-              {pipelineMode === 'vectorless' ? (
-                <div className="panel vectorless-side-panel">
-                  <h3>Navigation Evidence</h3>
-                  <div className="vectorless-path-list">
-                    {(queryResult?.selected_path || []).map((item, index) => (
-                      <div key={`${item.id}-${index}`} className="vectorless-path-row">
-                        <span>{index + 1}</span><div><strong>{item.label}</strong><small>{item.type}</small></div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : pipelineMode === 'graph' ? (
+              {pipelineMode === 'graph' ? (
                 <div className="panel graph-side-panel">
                   <h3>Graph Evidence Trail</h3>
                   <div className="graph-evidence-list">
@@ -646,9 +611,13 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-              ) : pipelineMode === 'rerank' ? (
+              ) : pipelineMode === 'crag' ? (
                 <div className="panel rerank-evidence-panel">
-                  <h3>Reranked Final Evidence</h3>
+                  <h3>Corrected Final Evidence</h3>
+                  <div className="rerank-summary-grid" style={{ marginBottom: 12 }}>
+                    <div><span>Branch</span><strong>{queryResult?.crag_summary?.branch || '-'}</strong></div>
+                    <div><span>Action</span><strong>{queryResult?.crag_summary?.action || '-'}</strong></div>
+                  </div>
                   <div className="hybrid-results">
                     {(queryResult?.results || []).map((result) => (
                       <div key={result.chunk_id} className="hybrid-result-row">
@@ -676,18 +645,6 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-              ) : pipelineMode === 'multihop' ? (
-                <div className="panel multihop-side-panel">
-                  <h3>Bridge Notes</h3>
-                  <div className="bridge-term-strip side">
-                    {(queryResult?.bridge_terms || []).map((term) => <i key={term}>{term}</i>)}
-                  </div>
-                  <div className="hop-list compact">
-                    {(queryResult?.hops || []).map((hop) => (
-                      <div key={hop.hop}><span>Hop {hop.hop}</span><strong>{hop.query}</strong><p>{hop.purpose}</p></div>
-                    ))}
-                  </div>
-                </div>
               ) : pipelineMode === 'hybrid' ? (
                 <div className="panel hybrid-evidence-panel">
                   <h3>Hybrid Final Evidence</h3>
@@ -703,8 +660,6 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-              ) : pipelineMode === 'bm25' ? (
-                <Bm25Analytics chunks={chunks} queryResult={queryResult} visData={visData} />
               ) : (
                 <NaiveRagAnalytics chunks={chunks} queryResult={queryResult} visData={visData} />
               )}

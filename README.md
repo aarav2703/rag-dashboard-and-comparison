@@ -1,122 +1,110 @@
 # RAG Evidence Lab
 
-**Comparative Retrieval-Augmented Generation Diagnostics**
+**A small research workbench for comparing how RAG systems find, judge, and explain evidence.**
 
-RAG Evidence Lab is a full-stack research prototype for comparing Retrieval-Augmented Generation (RAG) methods on the same PDF corpus. The goal is not just to return an answer, but to show how the answer was supported. A user can upload a PDF, build one shared document index, ask a question, and then inspect how different retrieval strategies selected evidence.
+RAG Evidence Lab is a full-stack prototype for studying Retrieval-Augmented Generation on a shared document corpus. You upload a PDF, ask one question, and compare how different RAG architectures retrieve evidence and build an answer.
 
-The project also includes a HotpotQA benchmark pipeline. This gives the work a more formal evaluation setting because HotpotQA contains multi-hop questions with gold supporting facts.
+The project is intentionally visual. It is not trying to be a polished chatbot first. Its main purpose is to make retrieval behavior inspectable: which chunks were selected, which methods agreed, which evidence was promoted or rejected, and where a pipeline needed correction.
 
-## Main Contributions
+An archived copy of the previous README is saved at:
 
-- Implements 8 RAG retrieval modes in one application.
-- Uses one shared corpus store, so the methods are compared on the same chunks.
-- Adds self-healing answer generation with a critic step that checks whether the response is grounded in retrieved evidence.
-- Builds visual diagnostics for each method instead of using a plain chatbot interface.
-- Includes a real HotpotQA adapter and benchmark runner for retrieval evaluation.
-- Reports standard retrieval metrics such as NDCG, Recall, Precision, MRR, MAP, and supporting fact hit rate.
+```text
+README.old-before-2026-rag-visual-refresh.md
+```
 
-## Methods Implemented
+## What Changed In This Iteration
 
-| # | Method | Main Idea |
-|---|--------|-----------|
-| 1 | **Naive Vector RAG** | Uses SentenceTransformer embeddings and FAISS semantic search. |
-| 2 | **BM25 Lexical Retrieval** | Uses exact query-term matching, inverse document frequency, and term-level highlights. |
-| 3 | **Hybrid RAG** | Combines vector and BM25 candidates with rank fusion. |
-| 4 | **Rerank RAG** | Retrieves a wider candidate set and reranks it with lexical-semantic features. |
-| 5 | **GraphRAG-lite** | Builds lightweight entity and section links, then retrieves through graph traversal. |
-| 6 | **Vectorless Markdown RAG** | Uses document structure and section navigation instead of embeddings. |
-| 7 | **Agentic RAG** | Simulates a plan, retrieve, critique, and retry workflow. |
-| 8 | **Multi-hop RAG** | Extracts bridge terms and performs hop-by-hop retrieval. |
+The project was cleaned up around **five public methods**:
+
+1. **Naive Vector RAG**
+2. **Hybrid RAG**
+3. **GraphRAG**
+4. **Agentic Multi-hop RAG**
+5. **Corrective RAG with Reranking**
+
+Several older public modes were folded into these methods instead of being shown as separate sidebar choices. BM25 is now Hybrid's sparse branch, reranking belongs inside CRAG, and standalone multi-hop is now part of Agentic RAG. Vectorless Markdown was removed from the main project story.
+
+The benchmark pipeline was also updated. HotpotQA evaluation now reports retrieval metrics such as Precision@K, Recall@K, Hit@K, MRR, MAP, and NDCG@K. Optional answer evaluation can add Exact Match, token F1, faithfulness, and answer relevancy.
+
+## Current Methods
+
+| Method | What It Does | What To Look At |
+|---|---|---|
+| **Naive Vector RAG** | A semantic baseline using embeddings and FAISS similarity search. | Nearest-neighbor map, top-k rings, similarity waterfall, retrieved chunks. |
+| **Hybrid RAG** | Combines dense vector search with BM25 sparse retrieval through rank fusion. | Vector/BM25/fused rank lanes, source overlap, final evidence list. |
+| **GraphRAG** | Retrieves through entities, relationship triples, communities, and answer subgraphs. | Interactive graph explorer, relationship paths, community summaries, graph score stacks. |
+| **Agentic Multi-hop RAG** | Uses structured planner decisions to choose retrieval tools, bridge evidence, and second-hop queries. | Decision loop board, tool network, scratchpad summaries, Gantt timeline, accepted/rejected evidence. |
+| **Corrective RAG with Reranking** | Reranks candidates, grades evidence, branches through correction or fallback, and checks groundedness. | Corrective decision tree, grade distribution, rerank movement, grounded answer panel. |
+
+Groundedness checking is deliberately **CRAG-only**. The other methods generate normal evidence-backed answers without critic verdicts or retry metadata.
 
 ## Screenshots
 
-The screenshots below show the current frontend after all methods are run on the same PDF and query. They are included because the main contribution of this project is the evidence inspection interface, not only the backend retrieval code.
+### Agentic Multi-hop RAG
 
-### Full Interface
+![Agentic scratchpad trace and tool timeline](docs/screenshots/ragnew1.png)
 
-![RAG Evidence Lab main interface](docs/screenshots/rag13.png)
+Agentic RAG now shows structured reasoning summaries rather than hidden chain-of-thought. The scratchpad describes the visible plan: query terms, missing lexical terms, bridge terms, second-hop query, evidence rule, tool loop count, and retry status.
 
-The main workspace keeps the selected retrieval method, pipeline console, PDF upload, question input, and diagnostics on one screen. This helped me compare retrieval behavior without switching between separate notebooks.
+![Agentic planner decisions](docs/screenshots/ragnew2.png)
 
-### Method Comparison
+Planner decisions are kept concise and auditable. The method can use vector, hybrid, graph, rerank, second-hop, web search, and answer tools. Tavily web search is available when `TAVILY_API_KEY` is set, but web calls are not used in default Hotpot benchmark runs.
 
-![Compare all methods view](docs/screenshots/rag1.png)
+![Agentic decision board and tool map](docs/screenshots/ragnew3.png)
 
-The comparison view runs all methods for the same question and shows evidence overlap, citation coverage, and answer differences. This is useful for seeing whether methods agree on the same pages or find different support.
+The tool network map makes the selected route visible. The goal is to show how the agent decided, not to pretend the agent is a black box with a single retrieval step.
 
-### Naive Vector RAG
+### Corrective RAG With Reranking
 
-![Naive vector RAG analytics](docs/screenshots/rag12.png)
+![Corrective RAG decision tree](docs/screenshots/ragnew4.png)
 
-Naive vector retrieval shows a 2D embedding projection, retrieved chunks, cosine similarity bars, and citation coverage. This makes the semantic search baseline easier to inspect than a list of top-k chunks.
+CRAG now owns reranking, evidence grading, correction, fallback, and groundedness checking. Evidence is graded as correct, ambiguous, or incorrect. Correct evidence answers directly; ambiguous evidence can trigger a local rewrite; incorrect evidence can fall back to web search when Tavily is configured.
 
-### BM25 Lexical Retrieval
+### Compare All Methods
 
-![BM25 lexical retrieval view](docs/screenshots/rag11.png)
+![Evidence agreement chord diagram](docs/screenshots/ragnew5.png)
 
-BM25 focuses on exact lexical evidence. The interface highlights query terms inside retrieved chunks, shows missing query-term warnings, and gives term rarity bars so the user can see why a chunk scored highly.
+The comparison page now uses an evidence agreement chord diagram. Chord thickness reflects shared retrieved chunks between methods, while each method's outer ring shows unique evidence. This is useful for seeing whether methods genuinely converge or merely produce similar-looking answers.
 
-![BM25 term rarity and contribution charts](docs/screenshots/rag10.png)
+## Backend And Retrieval Updates
 
-### Hybrid RAG
+- Public modes are now `naive`, `hybrid`, `graph`, `agentic`, and `crag`, plus `compare`.
+- BM25, reranking, and multi-hop remain useful internal machinery, but they are no longer standalone public modes.
+- Hybrid keeps BM25 as its sparse retrieval branch and combines it with vector retrieval.
+- GraphRAG now uses relationship triples, entity/title linking, community detection, community summaries, relationship-path scoring, and graph-first retrieval payloads.
+- Agentic RAG has a bounded tool loop with structured decisions, confidence, retries, second-hop retrieval, graph/rerank tools, and optional Tavily web search.
+- CRAG now grades the retrieval set, not only individual chunks, and returns branch metadata such as verdict, confidence, missing evidence summary, recommended action, fallback source, and correction attempts.
+- The global self-healing critic was removed from non-CRAG methods. CRAG remains the only method that shows groundedness verdicts and answer retry metadata.
 
-![Hybrid retrieval merge](docs/screenshots/rag9.png)
+## Frontend Updates
 
-Hybrid retrieval merges vector and BM25 candidates. The overlap matrix and rank-fusion views show which chunks came from semantic search, lexical search, or both.
+The interface was redesigned as a dense research dashboard.
 
-![Hybrid overlap and rank fusion details](docs/screenshots/rag8.png)
+- **Naive** uses a nearest-neighbor lens with top-k rings and a similarity waterfall.
+- **Hybrid** uses a three-lane rank-fusion chart for vector rank, BM25 rank, and fused rank.
+- **GraphRAG** is graph-first again, with hover focus, click-pinned neighborhoods, zoom controls, transparency for unrelated nodes, relationship paths, score stacks, and community panels.
+- **Agentic** shows planner decisions, selected tools, confidence, result counts, and accepted/rejected evidence.
+- **CRAG** shows a corrective decision tree, grade distribution, rerank details, fallback source, and grounded final answer.
+- **Compare** uses an evidence agreement chord diagram and consensus heatmap.
 
-### Rerank RAG
+The latest pass also tightened spacing across the method pages so visual cards have steadier sizes and fewer awkward boundaries.
 
-![Rerank RAG overview](docs/screenshots/rag7.png)
+## Older Methods
 
-![Rerank movement details](docs/screenshots/rag6.png)
+These methods are not deleted from the engineering history, but they are no longer public top-level modes:
 
-The rerank view shows how candidate chunks move after reranking. Promoted and demoted chunks are shown explicitly, which makes the reranker less of a hidden scoring step.
+| Older Mode | Current Status | Why It Was Moved |
+|---|---|---|
+| **BM25** | Internal helper inside Hybrid and other scoring paths. | BM25 is most useful as the sparse half of Hybrid RAG, not as a separate headline method. |
+| **Rerank RAG** | Folded into CRAG. | Reranking is strongest when paired with evidence grading and correction. |
+| **Standalone Multi-hop** | Folded into Agentic Multi-hop RAG. | Multi-hop retrieval is clearer when shown as planned tool use with bridge terms and confidence. |
+| **Vectorless Markdown** | Removed from the main story. | It was interesting structurally, but it did not fit the final five-method architecture. |
 
-![Rerank histogram and promoted chunk list](docs/screenshots/rag5.png)
+Older screenshots may still exist under `docs/screenshots/`, but the current README focuses on the five-method version of the app.
 
-### GraphRAG-lite
+## Evaluation
 
-![GraphRAG-lite evidence graph](docs/screenshots/rag4.png)
-
-GraphRAG-lite builds a lightweight evidence graph from entities, sections, and claims. The view shows the answer subgraph and the graph evidence trail used for the generated response.
-
-### Vectorless Markdown RAG
-
-![Vectorless Markdown RAG document tree](docs/screenshots/rag3.png)
-
-Vectorless Markdown RAG follows the document structure instead of embedding similarity. The document tree, selected path, and section confidence heatmap show how the system moved from document-level structure to answer evidence.
-
-### Agentic RAG
-
-![Agentic RAG control flow](docs/screenshots/rag2.png)
-
-Agentic RAG shows the decision trace: planning, tool calls, evidence inspection, critique, and retry status. This view is meant to make the agent workflow auditable instead of only showing the final answer.
-
-## Self-Healing Answer Generation
-
-Each query can produce an answer from the retrieved chunks. The answer is then passed through a critic stage. The critic checks whether the answer is grounded in the retrieved evidence. If the answer is weakly supported, the system can retry retrieval with a reformulated query or fall back to a safer response.
-
-This matters because a RAG system can still hallucinate after retrieval. In this project, the answer panel shows the answer, critic verdict, evidence count, retry information, confidence, and unsupported-claim notes when available.
-
-## Frontend Visualizations
-
-The frontend is a retrieval diagnostics interface rather than a minimal chatbot.
-
-- **Naive Vector RAG**: embedding space, zoom/pan controls, similarity bars, citation coverage, and answer panel.
-- **BM25**: evidence highlighter, query-term by chunk matrix, lexical page heatmap, term rarity bars, and missing-term warnings.
-- **Hybrid**: vector/BM25 overlap views, source badges, rank-fusion bump chart, and fusion table.
-- **Rerank**: candidate movement summary, slopegraph, score histogram, promoted/demoted chunks, and final evidence list.
-- **GraphRAG-lite**: evidence graph, answer subgraph, neighborhood view, query-path flow, and cited graph evidence.
-- **Vectorless Markdown**: document tree, selected path, section confidence heatmap, and structural evidence panel.
-- **Agentic RAG**: tool-call control flow, scratchpad trace, Gantt-style tool timeline, accepted evidence, and rejected evidence.
-- **Multi-hop RAG**: bridge terms, hop queries, bridge evidence table, and final multi-hop evidence.
-- **Compare All**: runs all methods for the same question and shows answer and evidence differences side by side.
-
-## HotpotQA Benchmark
-
-The benchmark pipeline uses the real Hugging Face dataset:
+The HotpotQA benchmark uses the real Hugging Face dataset:
 
 ```text
 hotpotqa/hotpot_qa
@@ -124,24 +112,70 @@ config: distractor
 split: validation
 ```
 
-The adapter converts HotpotQA examples into the same chunk schema used by the app. Each supporting fact is mapped to a relevant chunk ID, so retrieval can be evaluated against gold evidence instead of synthetic labels.
+The benchmark adapter maps Hotpot supporting facts into the project's chunk schema so retrieval can be scored against gold evidence.
 
-### Latest 150-Query Benchmark
+The current metrics include:
 
-This run used 150 HotpotQA validation questions, 6,111 chunks, top-k = 10, and all 8 retrieval modes. The run produced 1,200 query-mode rows and had 0 runner errors.
+- Precision@3, Precision@5, Precision@10
+- Recall@3, Recall@5, Recall@10
+- Hit@5 and Hit@10
+- MRR
+- MAP
+- NDCG@3, NDCG@5, NDCG@10
+- Supporting fact hit count and hit rate
+- All supporting facts found
 
-| Rank | Mode | NDCG@5 | Recall@5 | Recall@10 | MRR | MAP | Supporting Fact Hit Rate | All Facts Found |
-|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | Rerank | 0.8249 | 0.6647 | 0.7421 | 0.8727 | 0.5762 | 0.7421 | 0.4733 |
-| 2 | Hybrid | 0.8028 | 0.6649 | 0.7532 | 0.8436 | 0.5668 | 0.7532 | 0.4933 |
-| 3 | Agentic | 0.7936 | 0.6552 | 0.7527 | 0.8421 | 0.5661 | 0.7527 | 0.4733 |
-| 4 | Vectorless | 0.7893 | 0.6427 | 0.7499 | 0.8513 | 0.5726 | 0.7499 | 0.4733 |
-| 5 | BM25 | 0.7868 | 0.6427 | 0.7499 | 0.8480 | 0.5709 | 0.7499 | 0.4733 |
-| 6 | Multi-hop | 0.7482 | 0.6500 | 0.7504 | 0.7776 | 0.5322 | 0.7504 | 0.4933 |
-| 7 | Naive Vector | 0.7090 | 0.5836 | 0.7019 | 0.7453 | 0.4717 | 0.7019 | 0.4133 |
-| 8 | GraphRAG-lite | 0.2808 | 0.2150 | 0.3183 | 0.2905 | 0.1668 | 0.3183 | 0.1200 |
+Answer metrics are opt-in:
 
-The strongest method in this run was **Rerank RAG**, which had the best NDCG@5, MRR, and MAP. Hybrid and Agentic were close behind. GraphRAG-lite performed poorly in this benchmark, which suggests that the current lightweight graph construction does not yet match HotpotQA's sentence-level supporting fact structure.
+- Exact Match
+- Token F1
+- Faithfulness
+- Answer relevancy
+
+The default benchmark remains retrieval-only to avoid surprise DeepSeek or Tavily API calls.
+
+### Latest Benchmark Snapshot
+
+This snapshot is from a **100-query HotpotQA validation run** using `top_k=10` across the five public methods. It is retrieval-only: no answer generation, no DeepSeek judging, and no Tavily web search. The run completed with **0 errors** over 500 method-query evaluations.
+
+| Method | Recall@10 | Hit@10 | NDCG@5 | MRR | MAP | All Facts Found |
+|---|---:|---:|---:|---:|---:|---:|
+| **Hybrid RAG** | **0.7723** | 0.99 | **0.7991** | **0.8510** | **0.5838** | **0.53** |
+| **Agentic Multi-hop RAG** | 0.7690 | **1.00** | 0.7857 | 0.8382 | 0.5778 | 0.50 |
+| **Corrective RAG with Reranking** | 0.7507 | **1.00** | 0.7908 | 0.8474 | 0.5664 | 0.48 |
+| **Naive Vector RAG** | 0.7262 | 0.99 | 0.7241 | 0.7749 | 0.4933 | 0.45 |
+| **GraphRAG** | 0.0500 | 0.10 | 0.0246 | 0.0247 | 0.0125 | 0.01 |
+
+Hybrid is the strongest retrieval baseline in this run, while Agentic and CRAG stay close and add more diagnostic behavior. GraphRAG is included honestly as a research-stage implementation: its graph cache and visuals are useful, but its HotpotQA retrieval ranking still needs better entity linking and path scoring before it is competitive.
+
+## Benchmark Commands
+
+The full command list is kept in `HOTPOT_BENCHMARK_COMMANDS.txt`. A short version is:
+
+```powershell
+conda activate rag-multimodal
+python -m pip install datasets
+python benchmarking\hotpot_adapter.py --config distractor --split validation --limit 150
+python -m pip uninstall -y datasets pyarrow
+python benchmarking\build_hotpot_store.py
+python benchmarking\run_hotpot_benchmark.py --limit 150 --modes all --top-k 10
+python benchmarking\hotpot_metrics.py
+```
+
+For a small smoke run:
+
+```powershell
+python benchmarking\run_hotpot_benchmark.py --limit 5 --modes all --top-k 10
+python benchmarking\hotpot_metrics.py
+```
+
+To include answer generation and LLM-based answer metrics:
+
+```powershell
+python benchmarking\run_hotpot_benchmark.py --limit 150 --modes all --top-k 10 --include-answers
+python benchmarking\run_hotpot_benchmark.py --limit 150 --modes all --top-k 10 --include-answers --include-llm-metrics
+python benchmarking\hotpot_metrics.py
+```
 
 ## Tech Stack
 
@@ -152,17 +186,10 @@ The strongest method in this run was **Rerank RAG**, which had the best NDCG@5, 
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` |
 | Vector Search | FAISS `IndexFlatIP` |
 | LLM | DeepSeek Chat API |
-| Benchmarking | HotpotQA adapter, custom runner, custom metrics script |
+| Web Search | Tavily API, optional |
+| Benchmarking | HotpotQA adapter, benchmark runner, custom metrics |
 
-## Getting Started
-
-### Prerequisites
-
-- Python with conda
-- Node.js 18+
-- DeepSeek API key for answer generation and critic mode
-
-### Setup
+## Setup
 
 ```powershell
 conda create -n rag-multimodal python=3.10 -y
@@ -177,9 +204,18 @@ Create a `.env` file in the project root:
 
 ```text
 DEEPSEEK_API_KEY=your_key_here
+TAVILY_API_KEY=your_tavily_key_here
 ```
 
-### Run the App
+`TAVILY_API_KEY` is optional. Without it, Agentic and CRAG continue to run local retrieval tools, and web fallback is reported as unavailable.
+
+For deterministic local testing, external tools can be disabled:
+
+```text
+RAG_ALLOW_EXTERNAL_TOOLS=false
+```
+
+## Run The App
 
 Terminal 1:
 
@@ -195,7 +231,7 @@ cd frontend
 npm run dev
 ```
 
-Then open:
+Open:
 
 ```text
 http://localhost:5173
@@ -207,92 +243,43 @@ The backend runs on:
 http://127.0.0.1:5000
 ```
 
-The same commands are also listed in `PROJECT_COMMANDS.txt`.
-
-## HotpotQA Benchmark Commands
-
-The project keeps the full benchmark commands in `HOTPOT_BENCHMARK_COMMANDS.txt`. A short version is:
-
-```powershell
-conda activate rag-multimodal
-python -m pip install datasets
-python benchmarking\hotpot_adapter.py --config distractor --split validation --limit 150
-python -m pip uninstall -y datasets pyarrow
-python benchmarking\build_hotpot_store.py
-python benchmarking\run_hotpot_benchmark.py --limit 150 --modes all --top-k 10
-python benchmarking\hotpot_metrics.py
-```
-
-The `datasets` and `pyarrow` packages are kept out of the main runtime requirements because they caused instability in this local environment when combined with the embedding stack.
+The same commands are listed in `PROJECT_COMMANDS.txt`.
 
 ## Project Structure
 
 ```text
 RAG comparison/
 |-- backend.py
-|-- requirements.txt
+|-- README.md
+|-- README.old-before-2026-rag-visual-refresh.md
 |-- PROJECT_COMMANDS.txt
 |-- HOTPOT_BENCHMARK_COMMANDS.txt
 |-- docs/
+|   |-- RAG_METHOD_ROADMAP.md
 |   `-- screenshots/
 |-- benchmarking/
-|   |-- PLAN.md
 |   |-- hotpot_adapter.py
 |   |-- build_hotpot_store.py
 |   |-- run_hotpot_benchmark.py
 |   `-- hotpot_metrics.py
-|-- backend_or_exports/
-|   `-- current_corpus/
-|-- notebooks/
-|   |-- shared_rag_store.py
-|   |-- 00_build_faiss_corpus.py
-|   |-- 01_naive_vector_rag.py
-|   |-- 02_bm25_lexical_rag.py
-|   `-- 03_hybrid_rag.py
 |-- frontend/
 |   |-- package.json
 |   |-- vite.config.mjs
 |   `-- src/
 |       |-- App.jsx
 |       |-- styles.css
-|       |-- lib/
 |       `-- components/
-|           |-- AnswerCriticPanel.jsx
-|           |-- EmbeddingConstellation.jsx
-|           |-- Bm25Analytics.jsx
-|           |-- HybridAnalytics.jsx
-|           |-- RerankAnalytics.jsx
-|           |-- GraphRagAnalytics.jsx
-|           |-- VectorlessMarkdownAnalytics.jsx
-|           |-- AgenticRagAnalytics.jsx
-|           |-- MultiHopRagAnalytics.jsx
-|           |-- MethodComparison.jsx
-|           `-- ConsolePanel.jsx
+|-- notebooks/
 `-- data/
 ```
 
-## Evaluation Metrics
+## Notes
 
-The HotpotQA metrics script computes:
-
-- NDCG@3, NDCG@5, NDCG@10
-- Recall@3, Recall@5, Recall@10
-- Precision@3, Precision@5, Precision@10
-- MRR
-- MAP
-- supporting fact hit count
-- supporting fact hit rate
-- all supporting facts found
-
-These are retrieval metrics. They measure whether the system retrieved the gold supporting evidence, not whether the generated answer text is semantically correct.
-
-## Notes and Limitations
-
-- The current benchmark uses sentence-level HotpotQA chunks, which is useful for evidence evaluation but different from long PDF paragraph retrieval.
-- GraphRAG-lite is intentionally lightweight and does not yet perform deep graph construction or community summarization.
-- The self-healing critic improves answer safety, but retrieval quality still depends on the corpus, chunking, and selected mode.
-- The frontend is designed for interpretability and comparison, not minimal chatbot interaction.
-- This is a local research prototype. It is not packaged as a production desktop application or cloud service.
+- GraphRAG is much stronger than the first lightweight version, but it is still a practical research implementation rather than a full heavyweight GraphRAG system.
+- Agentic RAG shows structured decision summaries only. It does not expose hidden chain-of-thought.
+- CRAG is the only method with groundedness verdicts because correction is part of that method's purpose.
+- Tavily web search is interactive infrastructure, not part of default benchmark retrieval.
+- This is a local research prototype for method comparison and interpretability.
 
 ## License
 

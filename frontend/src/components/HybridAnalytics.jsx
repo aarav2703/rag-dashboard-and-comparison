@@ -1,11 +1,15 @@
 import React, { useMemo, useState } from 'react'
 import { sankey, sankeyLinkHorizontal } from 'd3-sankey'
-import AnswerCriticPanel from './AnswerCriticPanel.jsx'
 
 function sourceLabel(source) {
   if (source === 'vector-only') return 'Vector only'
   if (source === 'bm25-only') return 'BM25 only'
   return 'Both'
+}
+
+function rankY(rank, maxRank = 10) {
+  if (!rank) return 256
+  return 42 + ((Math.min(rank, maxRank) - 1) / Math.max(1, maxRank - 1)) * 190
 }
 
 export default function HybridAnalytics({ queryResult, visData }) {
@@ -44,7 +48,12 @@ export default function HybridAnalytics({ queryResult, visData }) {
       <h3>Hybrid Retrieval Merge</h3>
       <div className="hybrid-grid">
         <article className="viz-card" style={{ gridColumn: '1 / -1' }}>
-          <AnswerCriticPanel queryResult={queryResult} title="Hybrid Self-Healing Answer" />
+          <h4>Hybrid Answer</h4>
+          <p className="answer-critic-text">{queryResult?.answer || results[0]?.chunk_text_preview || 'No answer available yet.'}</p>
+          <div className="answer-critic-meta">
+            <span>Evidence {queryResult?.evidence_count ?? results.length}</span>
+            <span>{queryResult?.answer_source || 'awaiting answer'}</span>
+          </div>
         </article>
 
         <article className="viz-card hybrid-sankey-card">
@@ -95,23 +104,40 @@ export default function HybridAnalytics({ queryResult, visData }) {
         </article>
 
         <article className="viz-card">
-          <h4>Rank Fusion Bump Chart</h4>
-          <div className="fusion-bump-chart">
-            {rankFusionTable.slice(0, 10).map((row, idx) => (
-              <div key={`${row.chunk_id}-bump`} className="fusion-bump-row"
-                onMouseEnter={() => setHoverRank(row.rank)} onMouseLeave={() => setHoverRank(null)}
-                style={{ opacity: hoverRank && hoverRank !== row.rank ? 0.4 : 1, transition: 'opacity 200ms ease' }}>
-                <span className={`source-badge compact ${row.source}`}>{sourceLabel(row.source)}</span>
-                <div>
-                  <i style={{ left: `${row.vector_rank ? Math.min(94, row.vector_rank * 8) : 96}%` }} title={`Vector rank ${row.vector_rank || 'not found'}`} />
-                  <b style={{ left: `${row.bm25_rank ? Math.min(94, row.bm25_rank * 8) : 96}%` }} title={`BM25 rank ${row.bm25_rank || 'not found'}`} />
-                  <em style={{ left: `${Math.min(94, row.rank * 8)}%` }} title={`Hybrid rank ${row.rank}`} />
-                </div>
-                <strong>#{row.rank}</strong>
-              </div>
-            ))}
+          <h4>Three-Lane Rank Fusion Chart</h4>
+          <div className="fusion-lane-wrap">
+            <svg viewBox="0 0 680 300" className="fusion-lane-svg" preserveAspectRatio="xMidYMid meet">
+              {[
+                ['Vector', 120],
+                ['BM25', 340],
+                ['Fused', 560]
+              ].map(([label, x]) => (
+                <g key={label}>
+                  <line x1={x} y1="36" x2={x} y2="248" className="fusion-lane-axis" />
+                  <text x={x} y="22" textAnchor="middle" className="fusion-lane-title">{label}</text>
+                </g>
+              ))}
+              {rankFusionTable.slice(0, 10).map((row) => {
+                const vy = rankY(row.vector_rank)
+                const by = rankY(row.bm25_rank)
+                const fy = rankY(row.rank)
+                const active = hoverRank === row.rank
+                return (
+                  <g key={`${row.chunk_id}-lane`} className={`fusion-lane-path ${row.source} ${active ? 'active' : ''}`}
+                    onMouseEnter={() => setHoverRank(row.rank)} onMouseLeave={() => setHoverRank(null)}>
+                    <path d={`M120,${vy} C210,${vy} 250,${by} 340,${by} C430,${by} 470,${fy} 560,${fy}`} />
+                    <circle cx="120" cy={vy} r={row.vector_rank ? 5 : 3} />
+                    <circle cx="340" cy={by} r={row.bm25_rank ? 5 : 3} />
+                    <circle cx="560" cy={fy} r="6" />
+                    <text x="586" y={fy + 4}>#{row.rank}</text>
+                    <title>{`${sourceLabel(row.source)} | vector ${row.vector_rank || '-'} | BM25 ${row.bm25_rank || '-'} | fused ${row.rank}`}</title>
+                  </g>
+                )
+              })}
+              <text x="120" y="276" textAnchor="middle" className="fusion-lane-miss">missing ranks sit low</text>
+            </svg>
           </div>
-          <div className="fusion-bump-legend"><span><i />Vector</span><span><b />BM25</span><span><em />Hybrid</span></div>
+          <div className="fusion-bump-legend"><span><i />Vector</span><span><b />BM25</span><span><em />Fused</span></div>
         </article>
 
         <article className="viz-card">

@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from graph_cache import build_graph_artifacts
+
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE_DIR = ROOT / "backend_or_exports" / "current_corpus"
@@ -202,11 +204,12 @@ def build_store(pdf_path: str | Path) -> dict:
             "query_point": None,
         },
     )
+    graph_metadata = build_graph_artifacts(STORE_DIR, chunks, source="pdf")
 
     empty_query = {"query": "", "results": []}
     chunks_payload = {"mode": "shared", "chunk_count": len(chunks), "chunks": chunks}
     projection_payload = json.loads((STORE_DIR / "projection.json").read_text(encoding="utf-8"))
-    for prefix in ("naive_rag", "bm25_lexical", "hybrid_rag", "rerank_rag", "graph_rag", "vectorless_markdown", "agentic_rag", "multihop_rag"):
+    for prefix in ("naive_rag", "hybrid_rag", "graph_rag", "agentic_rag", "crag_rag"):
         write_json(FRONTEND_DATA_DIR / f"{prefix}_chunks.json", chunks_payload)
         write_json(FRONTEND_DATA_DIR / f"{prefix}_query_result.json", empty_query)
         write_json(FRONTEND_DATA_DIR / f"{prefix}_vis.json", projection_payload if prefix == "naive_rag" else {"query": "", "results": []})
@@ -216,6 +219,8 @@ def build_store(pdf_path: str | Path) -> dict:
         "chunk_count": len(chunks),
         "embedding_model": model_name,
         "embedding_device": str(device),
+        "graph_node_count": graph_metadata["node_count"],
+        "graph_edge_count": graph_metadata["edge_count"],
     }
 
 

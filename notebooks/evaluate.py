@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import string
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -49,6 +52,37 @@ def recall_at_k(relevance_scores: list[float], total_relevant: int, k: int) -> f
 
 def precision_at_k(relevance_scores: list[float], k: int) -> float:
     return sum(1 for r in relevance_scores[:k] if r > 0) / k
+
+
+def hit_at_k(relevance_scores: list[float], k: int) -> float:
+    return 1.0 if any(r > 0 for r in relevance_scores[:k]) else 0.0
+
+
+def normalize_answer(text: str) -> str:
+    text = str(text or "").lower()
+    text = "".join(ch for ch in text if ch not in string.punctuation)
+    text = re.sub(r"\b(a|an|the)\b", " ", text)
+    return " ".join(text.split())
+
+
+def exact_match_score(prediction: str, ground_truth: str) -> float:
+    return 1.0 if normalize_answer(prediction) == normalize_answer(ground_truth) else 0.0
+
+
+def token_f1_score(prediction: str, ground_truth: str) -> float:
+    pred_tokens = normalize_answer(prediction).split()
+    gold_tokens = normalize_answer(ground_truth).split()
+    if not pred_tokens and not gold_tokens:
+        return 1.0
+    if not pred_tokens or not gold_tokens:
+        return 0.0
+    common = Counter(pred_tokens) & Counter(gold_tokens)
+    overlap = sum(common.values())
+    if overlap == 0:
+        return 0.0
+    precision = overlap / len(pred_tokens)
+    recall = overlap / len(gold_tokens)
+    return 2 * precision * recall / (precision + recall)
 
 
 def map_at_k(all_relevance: list[list[float]], k: int) -> float:
@@ -131,7 +165,7 @@ def evaluate_across_methods(all_results: dict[str, dict[str, list[dict]]]) -> di
     method_names = list(all_results.keys())
     comparison = {"methods": method_names, "queries": query_ids, "table": {}}
 
-    for metric in ["ndcg@5", "mrr", "recall@5", "precision@5"]:
+    for metric in ["ndcg@5", "mrr", "map", "recall@5", "precision@5", "hit@5", "hit@10", "exact_match", "token_f1", "faithfulness", "answer_relevancy"]:
         comparison["table"][metric] = {}
         for method in method_names:
             method_data = all_results[method]
@@ -146,10 +180,24 @@ def evaluate_across_methods(all_results: dict[str, dict[str, list[dict]]]) -> di
                     values.append(ndcg_at_k(relevance, min(k, len(relevance))))
                 elif metric == "mrr":
                     values.append(mrr(relevance))
+                elif metric == "map":
+                    values.append(map_at_k([relevance], len(relevance)))
                 elif metric.startswith("recall"):
                     values.append(recall_at_k(relevance, len(relevant_ids), min(k, len(relevance))))
                 elif metric.startswith("precision"):
                     values.append(precision_at_k(relevance, min(k, len(relevance))))
+                elif metric.startswith("hit"):
+                    hit_k = 10 if metric.endswith("@10") else 5
+                    values.append(hit_at_k(relevance, min(hit_k, len(relevance))))
+                elif metric in {"exact_match", "token_f1"}:
+                    answer = next((row.get("answer") for row in results if row.get("answer")), "")
+                    gold = query_judgments.get("answer", "")
+                    if answer and gold:
+                        values.append(exact_match_score(answer, gold) if metric == "exact_match" else token_f1_score(answer, gold))
+                elif metric in {"faithfulness", "answer_relevancy"}:
+                    metric_values = [row.get(metric) for row in results if isinstance(row.get(metric), (int, float))]
+                    if metric_values:
+                        values.append(float(np.mean(metric_values)))
             comparison["table"][metric][method] = round(np.mean(values), 4) if values else 0.0
 
     comparison["ranking"] = {}

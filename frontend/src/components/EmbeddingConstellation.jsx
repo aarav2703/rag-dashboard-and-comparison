@@ -96,6 +96,7 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
   const results = queryResult?.results || []
   const maxSimilarity = results.length ? Math.max(...results.map((r) => finiteNumber(r.similarity_score))) : 1
   const hoverPoint = scaledPoints.find((p) => p.id === hoverId)
+  const rankById = new Map(results.map((row) => [row.chunk_id, row.rank]))
   const baseRadius = scaledPoints.length > 1800 ? 1.7 : scaledPoints.length > 900 ? 2.3 : 4
   const retrievedRadius = scaledPoints.length > 1800 ? 4.5 : scaledPoints.length > 900 ? 5 : 6
 
@@ -111,7 +112,7 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
   return (
     <section className="panel constellation-panel">
       <div className="constellation-head">
-        <div><h3>Interactive Embedding Space</h3><div className="zoom-hint">Wheel to zoom. Drag to pan. Hover nodes to inspect chunks.</div></div>
+        <div><h3>Nearest Neighbor Lens</h3><div className="zoom-hint">Top-k rings show how the query captures nearest semantic chunks.</div></div>
         <div className="constellation-stats">
           <span>{scaledPoints.length} points</span>
           <span>{chunks?.length || 0} chunks</span>
@@ -152,11 +153,16 @@ export default function EmbeddingConstellation({ chunks, queryResult, visData })
                     strokeDasharray={`${Math.max(2, dist * 0.18)} ${Math.max(4, dist * 0.12)}`} />
                 )
               })}
+              {queryPoint && [70, 130, 205].map((ring, index) => (
+                <circle key={`ring-${ring}`} cx={queryPoint.x} cy={queryPoint.y} r={ring} className={`topk-ring ring-${index}`} />
+              ))}
               {scaledPoints.map((p) => (
-                <circle key={p.id} cx={p.sx} cy={p.sy}
-                  r={p.isRetrieved ? retrievedRadius : baseRadius}
-                  className={p.isRetrieved ? 'node retrieved particle-dot' : 'node'}
-                  onMouseEnter={() => setHoverId(p.id)} onMouseLeave={() => setHoverId(null)} />
+                <g key={p.id} onMouseEnter={() => setHoverId(p.id)} onMouseLeave={() => setHoverId(null)}>
+                  <circle cx={p.sx} cy={p.sy}
+                    r={p.isRetrieved ? retrievedRadius : baseRadius}
+                    className={p.isRetrieved ? 'node retrieved particle-dot' : 'node'} />
+                  {p.isRetrieved && rankById.get(p.id) && <text x={p.sx + 7} y={p.sy - 7} className="retrieved-rank-label">{rankById.get(p.id)}</text>}
+                </g>
               ))}
               {queryPoint && (
                 <g>

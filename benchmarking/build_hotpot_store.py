@@ -22,13 +22,10 @@ FRONTEND_DATA_DIR = ROOT / "frontend" / "public" / "data"
 
 MODE_PREFIXES = (
     "naive_rag",
-    "bm25_lexical",
     "hybrid_rag",
-    "rerank_rag",
     "graph_rag",
-    "vectorless_markdown",
     "agentic_rag",
-    "multihop_rag",
+    "crag_rag",
 )
 
 
@@ -53,9 +50,11 @@ def import_store_builders() -> dict[str, Any]:
         load_embedding_model,
         project_embeddings,
     )
+    from graph_cache import build_graph_artifacts  # noqa: PLC0415
 
     return {
         "build_faiss_index": build_faiss_index,
+        "build_graph_artifacts": build_graph_artifacts,
         "embed_texts": embed_texts,
         "get_device": get_device,
         "load_embedding_model": load_embedding_model,
@@ -169,6 +168,7 @@ def build_hotpot_store(
         device_label = "skipped"
         build_index = build_faiss_index
         project = project_embeddings_fallback
+        from graph_cache import build_graph_artifacts
     else:
         builders = import_store_builders()
         device = builders["get_device"]()
@@ -180,6 +180,7 @@ def build_hotpot_store(
             batch_size=batch_size,
         )
         build_index = builders["build_faiss_index"]
+        build_graph_artifacts = builders["build_graph_artifacts"]
         project = builders["project_embeddings"]
 
     index = build_index(embeddings)
@@ -190,6 +191,7 @@ def build_hotpot_store(
     faiss.write_index(index, str(STORE_DIR / "faiss.index"))
     write_json(STORE_DIR / "chunks.json", {"chunks": chunks})
     write_json(STORE_DIR / "projection.json", projection_payload)
+    graph_metadata = build_graph_artifacts(STORE_DIR, chunks, source="hotpotqa")
 
     chunk_metadata = load_json(artifacts_dir / "hotpot_chunks.json").get("metadata", {})
     metadata = {
@@ -202,6 +204,10 @@ def build_hotpot_store(
         "embedding_model": model_name,
         "embedding_device": device_label,
         "index_type": "faiss.IndexFlatIP",
+        "graph_build_version": graph_metadata["graph_build_version"],
+        "graph_node_count": graph_metadata["node_count"],
+        "graph_edge_count": graph_metadata["edge_count"],
+        "graph_relationship_source": graph_metadata["relationship_source"],
         "store_builder": "benchmarking/build_hotpot_store.py",
         "pid": os.getpid(),
     }
@@ -233,6 +239,8 @@ def main() -> None:
     print(f"Chunks: {metadata['chunk_count']}")
     print(f"Queries: {metadata['query_count']}")
     print(f"Embedding model: {metadata['embedding_model']}")
+    print(f"Graph nodes: {metadata['graph_node_count']}")
+    print(f"Graph edges: {metadata['graph_edge_count']}")
 
 
 if __name__ == "__main__":

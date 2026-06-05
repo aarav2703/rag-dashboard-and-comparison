@@ -48,7 +48,7 @@ This overwrites:
 with the HotpotQA benchmark corpus.
 
 
-5. Run all 8 retrieval modes on the mini benchmark
+5. Run all public retrieval modes on the mini benchmark
 
   python benchmarking\run_hotpot_benchmark.py --limit 25 --modes all --top-k 10
 
@@ -65,11 +65,28 @@ This writes:
 This writes:
 
   benchmarking\results\hotpot_metrics.json
+  benchmarking\results\hotpot_benchmark_report.json
+
+Use `hotpot_benchmark_report.json` for frontend metrics pages. It is a compact
+dashboard-ready summary. Use `hotpot_metrics.json` only when you need full
+per-query/per-mode detail.
 
 
-Optional: run only fast lexical smoke test
+Optional: run only the baseline smoke test
 
-  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes bm25 --top-k 10
+  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes naive --top-k 10
+  python benchmarking\hotpot_metrics.py
+
+
+Optional: include answer metrics
+
+  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes all --top-k 10 --include-answers
+  python benchmarking\hotpot_metrics.py
+
+
+Optional: include DeepSeek judge metrics for faithfulness and answer relevancy
+
+  python benchmarking\run_hotpot_benchmark.py --limit 25 --modes all --top-k 10 --include-answers --include-llm-metrics
   python benchmarking\hotpot_metrics.py
 
 
@@ -83,7 +100,7 @@ Optional: scale up after the 25-query run works
 
 Optional: use the full validation split
 
-  python benchmarking\hotpot_adapter.py --config distractor --split validation
+  python benchmarking\hotpot_adapter.py --config distractor --split validation --full
   python benchmarking\build_hotpot_store.py
   python benchmarking\run_hotpot_benchmark.py --modes all --top-k 10
   python benchmarking\hotpot_metrics.py
@@ -98,4 +115,12 @@ Notes:
 - If all-mode retrieval exits silently or says raw results are missing, run step 5 again
   after uninstalling `datasets` and `pyarrow`.
 - `build_hotpot_store.py` intentionally overwrites the current app corpus. Re-run the PDF upload pipeline later if you want to restore a PDF corpus.
-- `run_hotpot_benchmark.py` avoids DeepSeek and benchmarks retrieval only.
+- `run_hotpot_benchmark.py` avoids DeepSeek and benchmarks retrieval only unless
+  `--include-answers` or `--include-llm-metrics` is passed.
+- Retrieval-only benchmark runs also disable Tavily/web fallback through
+  `RAG_ALLOW_EXTERNAL_TOOLS=false`.
+- `run_hotpot_benchmark.py` now checks that `backend_or_exports\current_corpus`
+  is a HotpotQA store before it runs. If it fails, run
+  `python benchmarking\build_hotpot_store.py` again.
+- Raw benchmark results are compact by default: retrieved rows keep only chunk ID,
+  rank, score, page/title metadata, source, and a short preview.

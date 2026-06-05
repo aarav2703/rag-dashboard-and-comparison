@@ -761,6 +761,31 @@ h1, h2, h3, h4, h5 {
 	font-weight: 600;
 }
 
+.topk-ring {
+	fill: none;
+	stroke: rgba(245, 158, 11, 0.22);
+	stroke-width: 1;
+	stroke-dasharray: 5 7;
+	pointer-events: none;
+}
+
+.topk-ring.ring-1 {
+	stroke: rgba(14, 165, 233, 0.2);
+}
+
+.topk-ring.ring-2 {
+	stroke: rgba(16, 185, 129, 0.18);
+}
+
+.retrieved-rank-label {
+	fill: #0f172a;
+	font-size: 10px;
+	font-weight: 900;
+	paint-order: stroke;
+	stroke: #fff;
+	stroke-width: 3px;
+}
+
 .hover-card {
 	position: absolute;
 	left: 12px;
@@ -1678,6 +1703,71 @@ button.overlap-cell {
 	gap: 8px;
 }
 
+.fusion-lane-wrap {
+	overflow-x: auto;
+}
+
+.fusion-lane-svg {
+	width: 100%;
+	min-width: 560px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: #f8fafc;
+}
+
+.fusion-lane-axis {
+	stroke: #cbd5e1;
+	stroke-width: 1.2;
+}
+
+.fusion-lane-title,
+.fusion-lane-miss {
+	fill: var(--muted);
+	font-size: 11px;
+	font-weight: 900;
+}
+
+.fusion-lane-miss {
+	font-size: 9px;
+}
+
+.fusion-lane-path path {
+	fill: none;
+	stroke: #64748b;
+	stroke-width: 2;
+	opacity: 0.5;
+}
+
+.fusion-lane-path.both path {
+	stroke: var(--tertiary);
+	stroke-width: 3;
+}
+
+.fusion-lane-path.vector-only path {
+	stroke: #0ea5e9;
+}
+
+.fusion-lane-path.bm25-only path {
+	stroke: #ef4444;
+}
+
+.fusion-lane-path.active path {
+	opacity: 1;
+	stroke-width: 4;
+}
+
+.fusion-lane-path circle {
+	fill: #fff;
+	stroke: currentColor;
+	stroke-width: 2;
+}
+
+.fusion-lane-path text {
+	fill: var(--ink);
+	font-size: 11px;
+	font-weight: 900;
+}
+
 .fusion-bump-row {
 	display: grid;
 	grid-template-columns: 92px 1fr 34px;
@@ -1860,8 +1950,133 @@ button.overlap-cell {
 
 .comparison-dashboard {
 	display: grid;
-	grid-template-columns: minmax(420px, 0.7fr) minmax(0, 1.3fr);
+	grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.1fr);
 	gap: 12px;
+}
+
+.comparison-chord-card {
+	overflow: hidden;
+}
+
+.agreement-chord-wrap {
+	display: grid;
+	gap: 10px;
+	justify-items: center;
+}
+
+.agreement-chord-svg {
+	width: min(100%, 520px);
+	height: auto;
+}
+
+.agreement-chord-core {
+	fill: #f8fafc;
+	stroke: var(--line);
+	stroke-width: 1;
+}
+
+.agreement-arc {
+	stroke: #fff;
+	stroke-width: 1.4;
+}
+
+.agreement-ribbon {
+	mix-blend-mode: multiply;
+	stroke: rgba(15, 23, 42, 0.08);
+	stroke-width: 0.5;
+}
+
+.agreement-label {
+	font-size: 11px;
+	font-weight: 900;
+	fill: var(--ink);
+}
+
+.agreement-sub {
+	font-size: 9px;
+	font-weight: 700;
+	fill: var(--muted);
+}
+
+.agreement-empty {
+	font-size: 13px;
+	font-weight: 800;
+	fill: var(--muted);
+}
+
+.agreement-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	justify-content: center;
+	font-size: 11px;
+	font-weight: 800;
+	color: var(--muted);
+}
+
+.agreement-legend span {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.agreement-legend i {
+	width: 10px;
+	height: 10px;
+	border-radius: 999px;
+}
+
+.consensus-heatmap {
+	display: grid;
+	gap: 5px;
+	max-height: 380px;
+	overflow: auto;
+}
+
+.consensus-head,
+.consensus-row {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) repeat(var(--method-count), minmax(46px, 60px));
+	gap: 5px;
+	align-items: center;
+	min-width: 560px;
+}
+
+.consensus-head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	padding-bottom: 4px;
+	background: var(--card);
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 900;
+	text-align: center;
+}
+
+.consensus-head span {
+	text-align: left;
+}
+
+.consensus-row span {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 11px;
+	color: #334155;
+}
+
+.consensus-row i {
+	display: grid;
+	place-items: center;
+	min-height: 28px;
+	border: 1px solid rgba(15, 23, 42, 0.07);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--accent) calc(var(--strength) * 86%), #f8fafc);
+	color: #0f172a;
+	font-style: normal;
+	font-size: 10px;
+	font-weight: 900;
 }
 
 .comparison-matrix {
@@ -2144,6 +2359,109 @@ button.overlap-cell {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 10px;
+}
+
+.crag-tree-card {
+	overflow: hidden;
+}
+
+.crag-decision-tree {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(90px, 1fr)) repeat(3, minmax(120px, 1.1fr)) minmax(150px, 1.2fr);
+	gap: 8px;
+	align-items: stretch;
+	overflow-x: auto;
+	padding-bottom: 4px;
+}
+
+.crag-tree-node,
+.crag-tree-branch {
+	position: relative;
+	display: grid;
+	align-content: center;
+	gap: 4px;
+	min-height: 74px;
+	min-width: 94px;
+	padding: 10px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: var(--card-alt);
+	color: var(--muted);
+}
+
+.crag-tree-node::after,
+.crag-tree-branch::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: -8px;
+	width: 8px;
+	height: 2px;
+	background: var(--line);
+}
+
+.crag-tree-node:last-child::after {
+	display: none;
+}
+
+.crag-tree-node span,
+.crag-tree-branch strong {
+	font-size: 12px;
+	font-weight: 900;
+	color: var(--ink);
+}
+
+.crag-tree-branch span,
+.crag-tree-node strong {
+	font-size: 10px;
+	font-weight: 800;
+	color: var(--muted);
+}
+
+.crag-tree-node.active,
+.crag-tree-branch.active,
+.crag-tree-node.gate.accepted {
+	border-color: var(--tertiary);
+	background: rgba(16, 185, 129, 0.08);
+	box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.12);
+}
+
+.crag-tree-branch.ambiguous.active {
+	border-color: var(--accent);
+	background: rgba(245, 158, 11, 0.1);
+}
+
+.crag-tree-branch.incorrect.active,
+.crag-tree-node.gate.rejected {
+	border-color: var(--danger);
+	background: rgba(239, 68, 68, 0.08);
+}
+
+.grade-distribution-strip {
+	display: flex;
+	overflow: hidden;
+	height: 12px;
+	margin-top: 12px;
+	border-radius: 999px;
+	background: #e2e8f0;
+}
+
+.grade-distribution-strip span {
+	min-width: 2px;
+}
+
+.grade-distribution-strip .correct { background: #10b981; }
+.grade-distribution-strip .ambiguous { background: #f59e0b; }
+.grade-distribution-strip .incorrect { background: #ef4444; }
+
+.grade-distribution-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 8px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 800;
 }
 
 .rerank-summary-grid div {
@@ -2499,6 +2817,156 @@ button.overlap-cell {
 .graph-canvas-card {
 	grid-row: span 2;
 }
+
+.graph-path-card {
+	overflow: hidden;
+}
+
+.graph-path-explorer {
+	display: grid;
+	grid-template-columns: minmax(130px, 0.42fr) minmax(380px, 1.4fr) minmax(150px, 0.55fr);
+	gap: 12px;
+	align-items: stretch;
+}
+
+.graph-path-column {
+	display: grid;
+	align-content: start;
+	gap: 7px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: var(--card-alt);
+}
+
+.graph-path-column span {
+	font-size: 10px;
+	font-weight: 900;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.graph-path-column strong {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 7px 8px;
+	border-radius: 7px;
+	background: #fff;
+	color: var(--ink);
+	font-size: 11px;
+}
+
+.graph-path-column.evidence strong {
+	border-left: 3px solid var(--tertiary);
+}
+
+.graph-path-column em {
+	color: var(--muted);
+	font-size: 11px;
+	font-style: normal;
+}
+
+.graph-path-svg {
+	width: 100%;
+	min-height: 250px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: #f8fafc;
+	color: #0e7490;
+}
+
+.graph-path-row-svg path {
+	fill: none;
+	stroke: currentColor;
+	stroke-linecap: round;
+	opacity: 0.42;
+	marker-end: url(#graph-arrow);
+}
+
+.graph-path-row-svg circle {
+	fill: #fff;
+	stroke: currentColor;
+	stroke-width: 2;
+}
+
+.graph-path-row-svg text {
+	fill: #334155;
+	font-size: 10px;
+	font-weight: 800;
+}
+
+.graph-path-empty {
+	fill: var(--muted);
+	font-size: 13px;
+	font-weight: 900;
+}
+
+.graph-community-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin-top: 10px;
+}
+
+.graph-community-strip span {
+	padding: 6px 9px;
+	border: 1px solid rgba(16, 185, 129, 0.22);
+	border-radius: 999px;
+	background: rgba(16, 185, 129, 0.08);
+	color: #047857;
+	font-size: 10px;
+	font-weight: 900;
+}
+
+.graph-score-stack-list {
+	display: grid;
+	gap: 9px;
+}
+
+.graph-score-stack-row {
+	display: grid;
+	grid-template-columns: minmax(150px, 0.5fr) minmax(200px, 1fr) minmax(180px, 0.75fr);
+	gap: 10px;
+	align-items: center;
+	padding: 9px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card-alt);
+}
+
+.graph-score-stack-row strong,
+.graph-score-stack-row small {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 11px;
+}
+
+.graph-score-stack-row small {
+	color: var(--muted);
+}
+
+.graph-score-stack-bar {
+	display: flex;
+	overflow: hidden;
+	height: 13px;
+	border-radius: 999px;
+	background: #e2e8f0;
+}
+
+.graph-score-stack-bar span {
+	min-width: 3px;
+}
+
+.score-title_entity_match { background: #f59e0b; }
+.score-direct_entity { background: #10b981; }
+.score-one_hop_relationship { background: #0ea5e9; }
+.score-two_hop_relationship { background: #7c3aed; }
+.score-vector_seed { background: #64748b; }
+.score-bm25_seed { background: #ef4444; }
+.score-empty { background: #cbd5e1; }
 
 .graph-canvas-wrap {
 	position: relative;
@@ -3135,6 +3603,124 @@ button.overlap-cell {
 	font-size: 11px;
 	font-weight: 800;
 	color: var(--muted);
+}
+
+.agent-decision-board-card,
+.agent-tool-network-card {
+	overflow: hidden;
+}
+
+.agent-decision-board {
+	display: grid;
+	gap: 6px;
+	overflow-x: auto;
+}
+
+.agent-decision-head,
+.agent-decision-row {
+	display: grid;
+	grid-template-columns: 42px minmax(160px, 1.2fr) 86px minmax(220px, 1.4fr) 62px 100px 92px;
+	gap: 7px;
+	align-items: center;
+	min-width: 900px;
+}
+
+.agent-decision-head {
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.agent-decision-row {
+	padding: 8px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card-alt);
+	font-size: 11px;
+}
+
+.agent-decision-row strong,
+.agent-decision-row p,
+.agent-decision-row em,
+.agent-decision-row span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-decision-row em {
+	padding: 5px 7px;
+	border-radius: 999px;
+	background: rgba(14, 165, 233, 0.1);
+	color: #0369a1;
+	font-style: normal;
+	font-weight: 900;
+	text-align: center;
+}
+
+.agent-decision-row p {
+	margin: 0;
+	color: var(--muted);
+}
+
+.agent-confidence-meter {
+	overflow: hidden;
+	height: 9px;
+	border-radius: 999px;
+	background: #e2e8f0;
+}
+
+.agent-confidence-meter i {
+	display: block;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--tertiary);
+}
+
+.agent-tool-network-svg {
+	width: 100%;
+	min-height: 230px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: #f8fafc;
+}
+
+.agent-tool-planner {
+	fill: #fff;
+	stroke: var(--accent);
+	stroke-width: 2.5;
+}
+
+.agent-tool-network-svg text {
+	fill: var(--ink);
+	font-size: 11px;
+	font-weight: 900;
+}
+
+.agent-tool-node line {
+	stroke: #cbd5e1;
+	stroke-width: 1.2;
+}
+
+.agent-tool-node circle {
+	fill: #fff;
+	stroke: #cbd5e1;
+	stroke-width: 1.5;
+}
+
+.agent-tool-node.active line {
+	stroke: var(--tertiary);
+	stroke-width: 2;
+}
+
+.agent-tool-node.active circle {
+	stroke: var(--tertiary);
+	fill: rgba(16, 185, 129, 0.08);
+}
+
+.agent-tool-node.skipped {
+	opacity: 0.46;
 }
 
 .agentic-layout {
@@ -3851,6 +4437,384 @@ button.overlap-cell {
 	color: #334155;
 }
 
+/* Unified method visual sizing and GraphRAG graph-first pass */
+.main-visual,
+.main-analytics,
+.compare-workspace,
+.graph-panel,
+.agentic-panel,
+.rerank-panel,
+.hybrid-panel {
+	gap: 14px;
+}
+
+.viz-card {
+	border-radius: 8px;
+	padding: 12px;
+	overflow: hidden;
+}
+
+.viz-card > h4,
+.graph-card-title h4 {
+	line-height: 1.15;
+}
+
+.graph-layout.graph-layout-first {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	align-items: start;
+}
+
+.graph-answer-card,
+.graph-hero-card,
+.graph-path-card,
+.graph-score-card,
+.graph-evidence-wide {
+	grid-column: 1 / -1;
+}
+
+.graph-hero-card {
+	display: grid;
+	gap: 10px;
+	padding: 12px;
+}
+
+.graph-card-title {
+	display: flex;
+	align-items: start;
+	justify-content: space-between;
+	gap: 12px;
+	min-width: 0;
+}
+
+.graph-card-title h4,
+.graph-card-title p {
+	margin: 0;
+}
+
+.graph-card-title p {
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.35;
+}
+
+.graph-mini-stats {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	flex-shrink: 0;
+}
+
+.graph-mini-stats span {
+	padding: 5px 8px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--card);
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.graph-canvas-wrap {
+	position: relative;
+	min-width: 0;
+}
+
+.graph-svg.graph-svg-hero {
+	width: 100%;
+	height: auto;
+	min-height: 520px;
+	max-height: min(72vh, 780px);
+	aspect-ratio: 980 / 640;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: #0a1220;
+	box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.04);
+	cursor: grab;
+	touch-action: none;
+}
+
+.graph-svg.graph-svg-hero:active {
+	cursor: grabbing;
+}
+
+.graph-svg .graph-bg {
+	fill: #0a1220;
+}
+
+.graph-rings circle {
+	fill: none;
+	stroke: rgba(148, 163, 184, 0.13);
+	stroke-width: 1;
+	stroke-dasharray: 6 10;
+	pointer-events: none;
+}
+
+.community-bubble {
+	fill: rgba(14, 165, 233, 0.035);
+	stroke: rgba(14, 165, 233, 0.16);
+	stroke-width: 1;
+	pointer-events: none;
+}
+
+.graph-edge {
+	fill: none;
+	stroke-linecap: round;
+	opacity: 0.5;
+	transition: opacity 140ms ease, stroke-width 140ms ease, stroke 140ms ease;
+	pointer-events: none;
+}
+
+.graph-edge.active {
+	opacity: 0.96;
+	filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.35));
+}
+
+.graph-edge.dimmed {
+	opacity: 0.07;
+}
+
+.graph-node {
+	cursor: pointer;
+	transition: opacity 140ms ease;
+}
+
+.graph-node circle {
+	stroke: rgba(248, 250, 252, 0.82);
+	stroke-width: 1.4;
+	filter: drop-shadow(0 7px 12px rgba(0, 0, 0, 0.32));
+	transition: stroke-width 140ms ease, opacity 140ms ease, filter 140ms ease;
+}
+
+.graph-node text {
+	fill: #dbeafe;
+	font-size: 10px;
+	font-weight: 800;
+	paint-order: stroke;
+	stroke: #0a1220;
+	stroke-width: 4px;
+	pointer-events: none;
+	transition: opacity 140ms ease, font-size 140ms ease;
+}
+
+.graph-node.dimmed circle,
+.graph-node.dimmed text {
+	opacity: 0.13;
+}
+
+.graph-node.focused circle,
+.graph-node:hover circle,
+.graph-node.selected circle {
+	stroke: var(--accent);
+	stroke-width: 3;
+	filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.32));
+}
+
+.graph-node.selected text {
+	font-size: 11px;
+}
+
+.graph-hover-card {
+	position: absolute;
+	left: 12px;
+	bottom: 12px;
+	z-index: 2;
+	display: grid;
+	gap: 4px;
+	width: min(460px, calc(100% - 24px));
+	max-height: 155px;
+	overflow: auto;
+	padding: 10px;
+	border: 1px solid rgba(148, 163, 184, 0.18);
+	border-radius: 8px;
+	background: rgba(8, 13, 23, 0.9);
+	color: #f8fafc;
+	backdrop-filter: blur(10px);
+	pointer-events: none;
+}
+
+.graph-hover-card strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.graph-hover-card span,
+.graph-hover-card p {
+	margin: 0;
+	color: #cbd5e1;
+	font-size: 12px;
+	line-height: 1.35;
+}
+
+.graph-controls {
+	margin: 0;
+}
+
+.graph-controls button {
+	min-width: 38px;
+}
+
+.graph-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin-top: 0;
+}
+
+.graph-legend button,
+.graph-entity-tags span {
+	background: var(--card);
+	color: var(--muted);
+	border-color: var(--line);
+	border-radius: 8px;
+}
+
+.graph-legend button.active {
+	border-color: var(--accent);
+	background: rgba(245, 158, 11, 0.1);
+	color: var(--accent);
+}
+
+.graph-legend i.document { background: #e2e8f0; }
+.graph-legend i.section { background: #38bdf8; }
+.graph-legend i.entity { background: #f59e0b; }
+.graph-legend i.claim { background: #a78bfa; }
+
+.graph-path-explorer {
+	grid-template-columns: minmax(130px, 0.45fr) minmax(320px, 1.35fr) minmax(150px, 0.55fr);
+}
+
+.graph-path-column,
+.graph-score-stack-row,
+.query-path-flow-row,
+.graph-evidence-card {
+	border-radius: 8px;
+	background: var(--card);
+}
+
+.graph-path-column strong {
+	background: var(--card-alt);
+	color: var(--ink);
+}
+
+.graph-path-svg {
+	min-height: 220px;
+	max-height: 300px;
+	background: #0a1220;
+	color: #38bdf8;
+}
+
+.graph-path-row-svg text {
+	fill: #dbeafe;
+	paint-order: stroke;
+	stroke: #0a1220;
+	stroke-width: 3px;
+}
+
+.graph-path-row-svg circle {
+	fill: #0a1220;
+}
+
+.graph-score-stack-row {
+	grid-template-columns: minmax(160px, 0.6fr) minmax(220px, 1fr) minmax(180px, 0.8fr);
+}
+
+.graph-score-stack-bar {
+	background: #0f172a;
+}
+
+.compact-scroll {
+	max-height: 360px;
+}
+
+.query-path-flow,
+.graph-evidence-list,
+.agent-accepted-list,
+.agent-rejected-pile,
+.agent-scratchpad,
+.rerank-movement-cards,
+.results {
+	scrollbar-width: thin;
+	scrollbar-color: var(--line-accent) transparent;
+}
+
+.query-path-flow-row strong,
+.query-path-flow-row i,
+.graph-evidence-card strong,
+.graph-evidence-card p {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.graph-evidence-card p,
+.agent-accepted-list p,
+.agent-rejected-pile p,
+.multihop-results p,
+.vectorless-result-card p,
+.rerank-movement-card p {
+	color: #cbd5e1;
+}
+
+.agent-tool-network-svg,
+.agent-flow-svg,
+.rerank-slope-svg,
+.decision-tree-svg,
+.rank-fusion-svg,
+.constellation-svg,
+.comparison-chord-svg,
+.graph-path-svg {
+	border-radius: 8px;
+}
+
+.agent-tool-network-svg {
+	min-height: 250px;
+	max-height: 360px;
+}
+
+.agent-decision-board-card,
+.agent-tool-network-card,
+.rerank-decision-card,
+.hybrid-fusion-card,
+.comparison-chord-card {
+	min-height: 0;
+}
+
+.rerank-grid,
+.hybrid-grid,
+.agentic-layout,
+.comparison-dashboard {
+	gap: 12px;
+	align-items: start;
+}
+
+.rerank-slope-svg,
+.decision-tree-svg {
+	max-height: min(62vh, 560px);
+}
+
+.hybrid-grid .viz-card,
+.rerank-grid .viz-card,
+.agentic-layout .viz-card,
+.comparison-dashboard .viz-card {
+	min-height: 0;
+}
+
+.constellation-svg {
+	max-height: min(66vh, 680px);
+}
+
+.comparison-dashboard {
+	grid-template-columns: minmax(340px, 0.95fr) minmax(0, 1.05fr);
+}
+
+.comparison-chord-svg {
+	max-height: min(64vh, 680px);
+}
+
 @media (max-width: 1500px) {
 	.project-layout {
 		grid-template-columns: minmax(0, 1fr);
@@ -4176,7 +5140,7 @@ button.overlap-cell {
 .eval-table-header,
 .eval-table-row {
 	display: grid;
-	grid-template-columns: 170px repeat(5, 78px);
+	grid-template-columns: 170px repeat(6, 78px);
 	gap: 5px;
 	align-items: center;
 	padding: 10px 8px;

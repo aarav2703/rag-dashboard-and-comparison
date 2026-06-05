@@ -12,7 +12,15 @@ function movementClass(movement) {
   return 'unchanged'
 }
 
-export default function RerankAnalytics({ queryResult, visData }) {
+function gradeCounts(grades) {
+  return grades.reduce((acc, row) => {
+    const key = row.grade || 'unknown'
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+}
+
+export default function CragAnalytics({ queryResult, visData }) {
   const [hoverId, setHoverId] = useState(null)
   const [animPhase, setAnimPhase] = useState(0)
   const rows = visData?.slopegraph || queryResult?.before_after_table || []
@@ -21,12 +29,21 @@ export default function RerankAnalytics({ queryResult, visData }) {
   const promoted = visData?.promoted_chunks || queryResult?.promoted_chunks || []
   const demoted = visData?.demoted_chunks || queryResult?.demoted_chunks || []
   const summary = visData?.summary || {}
+  const cragSummary = queryResult?.crag_summary || visData?.crag_flow || {}
+  const grades = queryResult?.evidence_grades || visData?.evidence_grades || []
+  const webResults = queryResult?.web_results || visData?.web_results || []
+  const correctionAttempts = queryResult?.correction_attempts || visData?.correction_attempts || []
 
   const slopeRows = useMemo(() => rows.slice(0, 14), [rows])
   const maxRank = Math.max(...slopeRows.flatMap((row) => [row.before_rank || 1, row.after_rank || 1]), 5)
   const height = Math.max(320, maxRank * 22)
   const maxBucket = Math.max(...histogram.map((bucket) => bucket.count || 0), 1)
   const hoverRow = rows.find((row) => row.chunk_id === hoverId)
+  const counts = gradeCounts(grades)
+  const totalGrades = Math.max(1, grades.length)
+  const activeBranch = cragSummary.branch || queryResult?.retrieval_verdict || 'pending'
+  const fallbackSource = cragSummary.fallback_source || queryResult?.fallback_source || 'none'
+  const criticVerdict = queryResult?.critic?.verdict || 'pending'
 
   React.useEffect(() => {
     const interval = setInterval(() => setAnimPhase((p) => p + 1), 2000)
@@ -36,30 +53,87 @@ export default function RerankAnalytics({ queryResult, visData }) {
   if (!rows.length) {
     return (
       <section className="panel rerank-panel">
-        <h3>Rerank Movement</h3>
-        <div className="visual-empty"><strong>No rerank data yet</strong><span>Run Rerank RAG and ask a question to see candidate rank movement.</span></div>
+        <h3>Corrective RAG Flow</h3>
+        <div className="visual-empty"><strong>No corrective trace yet</strong><span>Run CRAG and ask a question to see reranking, evidence grading, correction, and grounded answer checking.</span></div>
       </section>
     )
   }
 
   return (
     <section className="panel rerank-panel">
-      <h3>Rerank Movement</h3>
+      <h3>Corrective RAG with Reranking</h3>
 
       <div className="rerank-summary-grid">
         <div><span>Candidates</span><strong>{summary.candidate_count || rows.length}</strong></div>
         <div><span>Promoted</span><strong style={{ color: 'var(--tertiary)' }}>{summary.promoted_count ?? promoted.length}</strong></div>
-        <div><span>Demoted</span><strong style={{ color: 'var(--danger)' }}>{summary.demoted_count ?? demoted.length}</strong></div>
-        <div><span>Final evidence</span><strong>{results.length}</strong></div>
+        <div><span>Branch</span><strong style={{ color: 'var(--danger)' }}>{cragSummary.branch || '-'}</strong></div>
+        <div><span>Action</span><strong>{cragSummary.action || '-'}</strong></div>
+        <div><span>Grader</span><strong>{cragSummary.grader_source || '-'}</strong></div>
+        <div><span>Fallback</span><strong>{cragSummary.fallback_source || queryResult?.fallback_source || '-'}</strong></div>
       </div>
 
       <div className="rerank-grid">
         <article className="viz-card" style={{ gridColumn: '1 / -1' }}>
-          <AnswerCriticPanel queryResult={queryResult} title="Rerank Self-Healing Answer" />
+          <AnswerCriticPanel queryResult={queryResult} title="CRAG Grounded Answer" />
+        </article>
+
+        <article className="viz-card crag-tree-card" style={{ gridColumn: '1 / -1' }}>
+          <h4>Corrective Decision Tree</h4>
+          <div className="crag-decision-tree">
+            {['Query', 'Retrieve', 'Rerank', 'Grade'].map((label) => (
+              <div key={label} className="crag-tree-node active"><span>{label}</span></div>
+            ))}
+            <div className={`crag-tree-branch correct ${activeBranch === 'correct' ? 'active' : ''}`}>
+              <strong>Correct</strong><span>Answer directly</span>
+            </div>
+            <div className={`crag-tree-branch ambiguous ${activeBranch === 'ambiguous' ? 'active' : ''}`}>
+              <strong>Ambiguous</strong><span>Rewrite locally</span>
+            </div>
+            <div className={`crag-tree-branch incorrect ${activeBranch === 'incorrect' ? 'active' : ''}`}>
+              <strong>Incorrect</strong><span>{fallbackSource === 'web' ? 'Tavily fallback' : 'Local fallback'}</span>
+            </div>
+            <div className={`crag-tree-node gate ${criticVerdict}`}>
+              <span>Groundedness Gate</span><strong>{criticVerdict}</strong>
+            </div>
+          </div>
+          <div className="grade-distribution-strip">
+            <span className="correct" style={{ width: `${((counts.correct || 0) / totalGrades) * 100}%` }} title={`${counts.correct || 0} correct`} />
+            <span className="ambiguous" style={{ width: `${((counts.ambiguous || 0) / totalGrades) * 100}%` }} title={`${counts.ambiguous || 0} ambiguous`} />
+            <span className="incorrect" style={{ width: `${((counts.incorrect || 0) / totalGrades) * 100}%` }} title={`${counts.incorrect || 0} incorrect`} />
+          </div>
+          <div className="grade-distribution-legend">
+            <span>Correct {counts.correct || 0}</span>
+            <span>Ambiguous {counts.ambiguous || 0}</span>
+            <span>Incorrect {counts.incorrect || 0}</span>
+          </div>
+        </article>
+
+        <article className="viz-card" style={{ gridColumn: '1 / -1' }}>
+          <h4>Evaluator / Grader Branch</h4>
+          <div className="rerank-summary-grid">
+            <div><span>Correct</span><strong>{cragSummary.grade_counts?.correct || 0}</strong></div>
+            <div><span>Ambiguous</span><strong>{cragSummary.grade_counts?.ambiguous || 0}</strong></div>
+            <div><span>Incorrect</span><strong>{cragSummary.grade_counts?.incorrect || 0}</strong></div>
+            <div><span>Fallback</span><strong>{cragSummary.fallback_count || 0}</strong></div>
+            <div><span>Grade Conf.</span><strong>{cragSummary.average_grade_confidence?.toFixed?.(2) ?? '-'}</strong></div>
+            <div><span>Verdict</span><strong>{cragSummary.retrieval_verdict || queryResult?.retrieval_verdict || '-'}</strong></div>
+          </div>
+          {(cragSummary.missing_evidence_summary || queryResult?.missing_evidence_summary) && (
+            <div className="answer-critic-retry">
+              <span>Missing evidence</span>
+              <p>{cragSummary.missing_evidence_summary || queryResult.missing_evidence_summary}</p>
+            </div>
+          )}
+          {queryResult?.correction_query && queryResult.correction_query !== queryResult.query && (
+            <div className="answer-critic-retry">
+              <span>Correction query</span>
+              <p>{queryResult.correction_query}</p>
+            </div>
+          )}
         </article>
 
         <article className="viz-card rerank-slope-card">
-          <h4>Rank Movement Slopegraph</h4>
+          <h4>Rerank Details: Rank Movement Slopegraph</h4>
           <div className="coverage-note">Left is initial FAISS candidate rank. Right is final rank after reranking.</div>
           <svg className="rerank-slope-svg" viewBox={`0 0 640 ${height}`} preserveAspectRatio="xMidYMid meet">
             <text x="70" y="16" className="rerank-axis-label">Before rerank</text>
@@ -130,12 +204,42 @@ export default function RerankAnalytics({ queryResult, visData }) {
         </article>
 
         <article className="viz-card">
-          <h4>Promoted / Demoted Chunks</h4>
+          <h4>Correction Attempts</h4>
+          <div className="agent-timeline">
+            {correctionAttempts.length ? correctionAttempts.map((item, index) => (
+              <div key={`${item.action}-${index}`} className="agent-timeline-row complete">
+                <span>{index + 1}</span>
+                <div style={{ flex: 1 }}>
+                  <strong style={{ fontSize: 11 }}>{item.action}</strong>
+                  <p style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: 11 }}>{item.query}</p>
+                </div>
+                <em>{item.source}</em>
+              </div>
+            )) : <div className="comparison-empty">No correction attempt was needed.</div>}
+          </div>
+        </article>
+
+        <article className="viz-card">
+          <h4>Web Fallback Evidence</h4>
+          <div className="agent-rejected-pile">
+            {webResults.length ? webResults.map((item) => (
+              <div key={item.chunk_id}>
+                <strong>{item.title || item.url}</strong>
+                <span>{item.provider || 'tavily'}</span>
+                <p>{item.snippet || item.chunk_text_preview}</p>
+              </div>
+            )) : <div className="comparison-empty">No Tavily web fallback evidence used for this query.</div>}
+          </div>
+        </article>
+
+        <article className="viz-card">
+          <h4>Evidence Grades</h4>
           <div className="rerank-movement-cards">
-            {[...promoted.slice(0, 3), ...demoted.slice(0, 3)].map((row) => (
-              <div key={`${row.chunk_id}-${row.movement}`} className={`rerank-movement-card ${movementClass(row.movement)}`}>
-                <strong>P{row.page_number} {row.movement > 0 ? `promoted +${row.movement}` : `demoted ${row.movement}`}</strong>
-                <p>{row.preview}</p>
+            {(grades.length ? grades : [...promoted.slice(0, 3), ...demoted.slice(0, 3)]).slice(0, 6).map((row) => (
+              <div key={`${row.chunk_id}-${row.grade || row.movement}`} className={`rerank-movement-card ${row.grade === 'correct' ? 'promoted' : row.grade === 'incorrect' ? 'demoted' : movementClass(row.movement || 0)}`}>
+                <strong>P{row.page_number} {row.grade || (row.movement > 0 ? `promoted +${row.movement}` : `demoted ${row.movement}`)}</strong>
+                <p>{row.grade_reason || row.reason || row.preview}</p>
+                {typeof row.confidence === 'number' && <span>confidence {row.confidence.toFixed(2)}</span>}
               </div>
             ))}
           </div>

@@ -29,6 +29,8 @@ def main() -> None:
     print(f"Chunks indexed: {summary['chunk_count']}")
     print(f"Embedding model: {summary['embedding_model']}")
     print(f"Embedding device: {summary['embedding_device']}")
+    print(f"Graph nodes: {summary['graph_node_count']}")
+    print(f"Graph edges: {summary['graph_edge_count']}")
     print("Exporting shared corpus artifacts...")
     print("Pipeline completed successfully")
 
